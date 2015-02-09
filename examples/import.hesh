@@ -1,0 +1,3 @@
+import Prelude (return)
+
+main = return ()

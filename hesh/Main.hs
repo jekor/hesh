@@ -1,0 +1,196 @@
+{-# LANGUAGE DeriveGeneric #-}
+
+import Cartel (empty)
+import qualified Cartel as Cartel
+import Control.Monad (mapM_, liftM, when)
+import Control.Exception (catch, throw, SomeException)
+import Crypto.Hash (hash, digestToHexByteString, Digest, MD5)
+import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
+import Data.Key (mapWithKeyM_)
+import Data.List (intercalate, find)
+import qualified Data.Map.Strict as Map
+import Data.Map.Lazy (foldrWithKey)
+import Data.Maybe (fromMaybe)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8, decodeUtf8)
+import qualified Data.Text.IO as TIO
+import Data.Time.LocalTime (getZonedTime)
+import qualified Data.Version as V
+import Distribution.Hackage.DB (readHackage, hackagePath)
+import Distribution.PackageDescription (condLibrary, condTreeData, exposedModules)
+import Distribution.Text (display)
+import Distribution.Version (versionBranch)
+import GHC.Generics (Generic)
+import Language.Haskell.Exts.Annotated (fromParseResult, parseModuleWithMode, ParseMode(..), defaultParseMode)
+import Language.Haskell.Exts.Annotated.Syntax (Module(..), ModuleName(..), ImportDecl(..))
+import Language.Haskell.Exts.Pretty (prettyPrint)
+import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
+import System.Exit (ExitCode(..), exitFailure)
+import System.FilePath ((</>), replaceFileName)
+import System.IO (hPutStrLn, stderr, writeFile)
+import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProcess(..), shell, proc)
+
+waitForSuccess :: String -> ProcessHandle -> IO ()
+waitForSuccess cmd p = do
+  code <- waitForProcess p
+  when (code /= ExitSuccess) $ do
+    hPutStrLn stderr $ cmd ++ ": exited with code " ++ show code
+    exitFailure
+
+callCommandInDir :: String -> FilePath -> IO ()
+callCommandInDir cmd dir = do
+  (_, _, _, p) <- createProcess $ (shell cmd) { cwd = Just dir }
+  waitForSuccess cmd p
+
+callCommand :: FilePath -> [String] -> IO ()
+callCommand path args = do
+  (_, _, _, p) <- createProcess $ proc path args
+  waitForSuccess path p
+
+catchAny :: IO a -> (SomeException -> IO a) -> IO a
+catchAny = catch
+
+-- Read a value from a cache (JSON-encoded file), writing it out if
+-- the cached value doesn't exist or is invalid.
+fromFileCache :: (FromJSON a, ToJSON a) => FilePath -> a -> IO a
+fromFileCache path value = do
+  catchAny readCached (\_ -> BL.writeFile path (encode value) >> return value)
+ where readCached = do
+         d <- BL.readFile path
+         case decode d of
+           Just x -> return x
+           Nothing -> error "Failed to parse JSON."
+
+modulesPath :: IO FilePath
+modulesPath = do
+  hPath <- hackagePath
+  return $ replaceFileName hPath "modules.json"
+
+importsFromModule :: Module l -> [String]
+importsFromModule (Module _ _ _ imports _) = map importName imports
+ where importName (ImportDecl _ (ModuleName _ m) _ _ _ _ _) = m
+
+-- packagesFromModules :: ? -> String -> PackageConstraint
+packageFromModules modules m =
+  Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
+
+main = do
+  -- First, create a cabal sandbox for the script. We want predictable
+  -- results, so we won't share a cabal directory with anything else.
+  --
+  -- One option would be to create the sandbox in the current
+  -- directory, but that would depend on running the script from its
+  -- directory, another is to create it in the script's directory, but
+  -- we don't know that we have write permissions to that (if it's
+  -- even a writable directory). An always writeable option is to use
+  -- a temporary directory, however, this has the disadvantage that
+  -- it'll could be cleaned up automatically and slow down start time
+  -- for later calls of the script. Additionally, how do we name the
+  -- directory to avoid collisions? If we just use the script name
+  -- there's a high chance of collisions.  If we use a hash of the
+  -- script we have to rebuild the directory every time the script
+  -- changes (viable for production but not during development).
+  --
+  -- We can compromise flexibility and safety by providing a command
+  -- line parameter for the sandbox directory. For maximum safety,
+  -- we'll use a hash of the script contents (this has the added
+  -- benefit of ensuring that changes in the script don't break due to
+  -- cabal packages already installed), however, the user of the
+  -- script can specify a different directory (possibly in a permanent
+  -- location).
+  source <- TIO.getContents
+  let md5 = hash $ encodeUtf8 source :: Digest MD5
+  dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
+  createDirectoryIfMissing False dir
+  -- `cabal sandbox init` accepts a --sandbox argument, but it gets
+  -- confused if run in a directory with an existing cabal sandbox (a
+  -- likely scenario). To avoid that, we'll use a different working
+  -- directory.
+  callCommandInDir "cabal sandbox init" dir
+  -- Cabal sandboxes do not maintain their own package lists. We have
+  -- to rely on whatever the user has updated.
+  -- First, get the module -> package+version lookup table.
+  p <- modulesPath
+  modules <- fromFileCache p =<< modulePackages
+  -- Now, parse the script and find any import references.
+  let ast = fromParseResult $ parseModuleWithMode defaultParseMode {parseFilename = "stdin"} (Text.unpack source)
+      imports = importsFromModule ast
+      -- From the imports, build a list of necessary packages.
+      packages = map (packageFromModules modules) imports
+  writeFile (dir </> "Main.hs") (prettyPrint ast)
+  now <- getZonedTime
+  -- Cartel expects us to provide the version of the Cartel library
+  -- but doesn't export the version for us, so we use 0.
+  writeFile (dir </> "script.cabal") $ Cartel.renderString "" now (V.Version [0] []) (cartel (map constrainedPackage packages))
+  -- Cabal will complain without a LICENSE file.
+  writeFile (dir </> "LICENSE") ""
+  callCommandInDir "cabal install" dir
+  -- Finally, run the script.
+  -- Should we exec() here?
+  -- TODO: Pass the arguments to hesh onto the script.
+  -- callCommand (dir </> "dist/build/script/script") []
+  callCommand (dir </> ".cabal-sandbox/bin/script") []
+
+-- PackageConstraint -> Package
+-- Always prefer base, otherwise arbitrarily take the first module.
+constrainedPackage ps = Cartel.Package (Text.unpack (packageName package)) Nothing
+ where package = case find (\p -> packageName p == (Text.pack "base")) ps of
+                   Just p' -> p'
+                   Nothing -> head ps
+-- data PackageConstraint = PackageConstraint { packageName :: Text.Text
+--                                            , packageMinVersion :: [Int]
+--                                            , packageMaxVersion :: [Int]
+--                                            } deriving Generic
+
+cartel packages = Cartel.empty { Cartel.cProperties = properties
+                               , Cartel.cExecutables = [executable] }
+ where properties = Cartel.empty
+         { Cartel.prName         = "script"
+         , Cartel.prVersion      = Cartel.Version [0,1]
+         , Cartel.prCabalVersion = (1,18)
+         , Cartel.prBuildType    = Cartel.Simple
+         , Cartel.prLicense      = Cartel.AllRightsReserved
+         , Cartel.prLicenseFile  = "LICENSE"
+         , Cartel.prCategory     = "shell"
+         }
+       executable = Cartel.Executable "script" fields
+       fields = [ Cartel.ExeMainIs "Main.hs"
+                , Cartel.ExeInfo (Cartel.DefaultLanguage Cartel.Haskell2010)
+                , Cartel.ExeInfo (Cartel.BuildDepends ([Cartel.Package "base" Nothing] ++ packages))
+                ]
+
+-- type ModulePackages = Map.Map Text.Text [PackageConstraint]
+
+-- We make the simplifying assumption that a module only appears in a
+-- contiguous version range.
+data PackageConstraint = PackageConstraint { packageName :: Text.Text
+                                           , packageMinVersion :: [Int]
+                                           , packageMaxVersion :: [Int]
+                                           } deriving Generic
+
+instance ToJSON PackageConstraint
+instance FromJSON PackageConstraint
+
+modulePackages = foldrWithKey buildConstraints Map.empty `liftM` readHackage
+ where buildConstraints name versions constraints = foldrWithKey (buildConstraints' name) constraints versions
+       buildConstraints' name version meta constraints = foldr (\m cs -> Map.alter (alterConstraint (Text.pack name) (versionBranch version)) m cs) constraints (map (Text.pack . display) (exposedModules' meta))
+       alterConstraint packageName' version constraint =
+         case constraint of
+           Nothing -> Just [PackageConstraint packageName' version version]
+           Just constraints ->
+             -- TODO: This could probably be more efficient.
+             case find (\c -> packageName c == packageName') constraints of
+               -- If the package is already listed, update the constraint.
+               Just _ -> Just (map (updateConstraint packageName' version) constraints)
+               -- If not, add a new constraint.
+               Nothing -> Just $ constraints ++ [PackageConstraint packageName' version version]
+       updateConstraint name version constraint = if packageName constraint == name
+                                                    then if version < packageMinVersion constraint
+                                                           then constraint { packageMinVersion = version }
+                                                           else if version < packageMaxVersion constraint
+                                                                  then constraint { packageMaxVersion = version }
+                                                                  else constraint
+                                                    else constraint
+       exposedModules' = fromMaybe [] . fmap (exposedModules . condTreeData) . condLibrary

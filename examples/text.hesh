@@ -1,0 +1,5 @@
+import qualified Data.Text as Text
+import Data.Text.IO (putStrLn)
+import Prelude () -- To hide Prelude.putStrLn
+
+main = putStrLn (Text.pack "Hello, text!")
