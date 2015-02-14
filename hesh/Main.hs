@@ -8,11 +8,12 @@ import Crypto.Hash (hash, digestToHexByteString, Digest, MD5)
 import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Generics.Uniplate.Data (universeBi)
 import Data.Key (mapWithKeyM_)
-import Data.List (intercalate, find)
+import Data.List (intercalate, find, filter, nub)
 import qualified Data.Map.Strict as Map
 import Data.Map.Lazy (foldrWithKey)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import qualified Data.Text.IO as TIO
@@ -23,8 +24,8 @@ import Distribution.PackageDescription (condLibrary, condTreeData, exposedModule
 import Distribution.Text (display)
 import Distribution.Version (versionBranch)
 import GHC.Generics (Generic)
-import Language.Haskell.Exts.Annotated (fromParseResult, parseModuleWithMode, ParseMode(..), defaultParseMode)
-import Language.Haskell.Exts.Annotated.Syntax (Module(..), ModuleName(..), ImportDecl(..))
+import Language.Haskell.Exts (fromParseResult, parseModule)
+import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ImportDecl(..), QName(..), Name(..), Exp(..), SrcLoc(..))
 import Language.Haskell.Exts.Pretty (prettyPrint)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
 import System.Exit (ExitCode(..), exitFailure)
@@ -68,9 +69,16 @@ modulesPath = do
   hPath <- hackagePath
   return $ replaceFileName hPath "modules.json"
 
-importsFromModule :: Module l -> [String]
-importsFromModule (Module _ _ _ imports _) = map importName imports
- where importName (ImportDecl _ (ModuleName _ m) _ _ _ _ _) = m
+qualifiedNamesFromModule :: Module -> [(String, String)]
+qualifiedNamesFromModule m = [ (mName, name) | Qual (ModuleName mName) (Ident name) <- universeBi m ]
+
+importsFromModule :: Module -> [(String, Maybe String)]
+importsFromModule (Module _ _ _ _ _ imports _) = map importName imports
+ where importName (ImportDecl _ (ModuleName m) _ _ _ _ Nothing _) = (m, Nothing)
+       importName (ImportDecl _ (ModuleName m) _ _ _ _ (Just (ModuleName n)) _) = (m, Just n)
+
+importDecl :: String -> ImportDecl
+importDecl m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False False Nothing Nothing Nothing
 
 -- packagesFromModules :: ? -> String -> PackageConstraint
 packageFromModules modules m =
@@ -114,12 +122,22 @@ main = do
   -- First, get the module -> package+version lookup table.
   p <- modulesPath
   modules <- fromFileCache p =<< modulePackages
-  -- Now, parse the script and find any import references.
-  let ast = fromParseResult $ parseModuleWithMode defaultParseMode {parseFilename = "stdin"} (Text.unpack source)
+  -- Now, parse the script.
+  let ast = fromParseResult $ parseModule (Text.unpack source)
+      -- Find all qualified module names to add module names to the import list (qualified).
+      names = qualifiedNamesFromModule ast
+      -- Find any import references.
       imports = importsFromModule ast
+      -- Remove aliased modules from the names.
+      aliases = catMaybes (map snd imports)
+      fqNames = filter (`notElem` aliases) (map fst names)
+      -- Insert qualified module usages back into the import list.
+      (Module a b c d e importDecls f) = ast
+      expandedImports = importDecls ++ map importDecl fqNames
+      expandedAst = Module a b c d e expandedImports f
       -- From the imports, build a list of necessary packages.
-      packages = map (packageFromModules modules) imports
-  writeFile (dir </> "Main.hs") (prettyPrint ast)
+      packages = map (packageFromModules modules) (map fst imports ++ fqNames)
+  writeFile (dir </> "Main.hs") (prettyPrint expandedAst)
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
   -- but doesn't export the version for us, so we use 0.
@@ -139,10 +157,6 @@ constrainedPackage ps = Cartel.Package (Text.unpack (packageName package)) Nothi
  where package = case find (\p -> packageName p == (Text.pack "base")) ps of
                    Just p' -> p'
                    Nothing -> head ps
--- data PackageConstraint = PackageConstraint { packageName :: Text.Text
---                                            , packageMinVersion :: [Int]
---                                            , packageMaxVersion :: [Int]
---                                            } deriving Generic
 
 cartel packages = Cartel.empty { Cartel.cProperties = properties
                                , Cartel.cExecutables = [executable] }
@@ -160,8 +174,6 @@ cartel packages = Cartel.empty { Cartel.cProperties = properties
                 , Cartel.ExeInfo (Cartel.DefaultLanguage Cartel.Haskell2010)
                 , Cartel.ExeInfo (Cartel.BuildDepends ([Cartel.Package "base" Nothing] ++ packages))
                 ]
-
--- type ModulePackages = Map.Map Text.Text [PackageConstraint]
 
 -- We make the simplifying assumption that a module only appears in a
 -- contiguous version range.

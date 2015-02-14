@@ -2,7 +2,7 @@
 -- see http://haskell.org/cabal/users-guide/
 
 name:                hesh
-version:             0.1.0
+version:             0.2.0
 -- synopsis:            
 -- description:         
 license:             MIT
@@ -23,7 +23,7 @@ executable hesh
                        base >= 4.7,
                        bytestring,
                        Cabal,
-                       cartel,
+                       cartel < 0.11,
                        containers,
                        cryptohash,
                        directory,
@@ -33,6 +33,7 @@ executable hesh
                        process,
                        keys,
                        text,
-                       time
+                       time,
+                       uniplate
   hs-source-dirs:      hesh
   default-language:    Haskell2010

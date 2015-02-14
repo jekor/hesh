@@ -1,0 +1,1 @@
+main = Data.Text.IO.putStrLn (Data.Text.pack "Hello, text!")

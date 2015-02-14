@@ -66,3 +66,11 @@ Note that:
 
 * The first time hesh runs it needs to build and cache a more efficient representation of the hackage list, which can take up to a few minutes.
 * Unfortunately you cannot currently use separate package databases for each script/Cabal sandbox.
+
+## Automatic Module Imports
+
+Sometimes you only want to use a single function from a module, especially when first drafting a script. It's distracting to have to add the module to the imports list. hesh lets you write the fully qualified name inline and adds the module import for you (adding the appropriate Hackage package as well, if necessary). We can rewrite the previous example as:
+
+```
+main = Data.Text.IO.putStrLn (Data.Text.pack "Hello, text!")
+```
