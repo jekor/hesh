@@ -1,6 +1,8 @@
 # hesh - Haskell Extensible Shell
 
-hesh automates a set of shortcuts that make writing scripts in Haskell more convenient. hesh is not an interpreter or compiler itself; instead it transforms your single-file script into a complete Haskell program and then compiles it to a native binary.
+hesh makes writing scripts in Haskell easier. It automates a set of shortcuts that make writing scripts in Haskell more convenient.
+
+hesh does not have an interactive mode; it's intended for scripts. hesh is not an interpreter or compiler itself; instead it transforms your single-file script into a complete Haskell program and then compiles it to a native binary.
 
 ## Automatic Cabal File Generation
 
@@ -73,6 +75,25 @@ Sometimes you only want to use a single function from a module, especially when 
 
 ```
 main = Data.Text.IO.putStrLn (Data.Text.pack "Hello, text!")
+```
+
+## Using a Shebang
+
+hesh can be used to create a self-contained script, as with `runghc` or `runhaskell`. Take the following script:
+
+```
+#!/usr/bin/env hesh
+
+main = putStrLn . show =<< System.Environment.getArgs
+```
+
+If you saved the above into a script named `showargs.hesh` and marked it as executable (`chmod +x`), you could use it like:
+
+```
+$ ./showargs.hesh
+[]
+$ ./showargs.hesh 1 2 3
+["1","2","3"]
 ```
 
 ## Notes

@@ -1,0 +1,3 @@
+#!/usr/bin/env hesh
+
+main = putStrLn . show =<< System.Environment.getArgs

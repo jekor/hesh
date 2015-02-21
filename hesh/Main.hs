@@ -3,6 +3,7 @@
 
 import Cartel (empty)
 import qualified Cartel as Cartel
+import Control.Applicative ((<$>), (<*>))
 import Control.Monad (mapM_, liftM, when)
 import Control.Exception (catch, throw, SomeException)
 import Crypto.Hash (hash, digestToHexByteString, Digest, MD5)
@@ -28,8 +29,10 @@ import GHC.Generics (Generic)
 import Language.Haskell.Exts (fromParseResult, parseModule)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ImportDecl(..), QName(..), Name(..), Exp(..), SrcLoc(..))
 import Language.Haskell.Exts.Pretty (prettyPrint)
+import System.Console.CmdTheLine (Term, TermInfo(..), OptInfo(..), PosInfo(..), flag, value, pos, posAny, optInfo, posInfo, defTI)
+import System.Console.CmdTheLine.Term (run)
+import System.Console.CmdTheLine.Util (fileExists)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
-import System.Environment (getArgs)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), replaceFileName)
 import System.IO (hPutStrLn, stderr, writeFile)
@@ -86,7 +89,21 @@ importDecl m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False False Nothin
 packageFromModules modules m =
   Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
 
-main = do
+main = run (term, termInfo)
+
+term = hesh <$> flagStdin <*> optionFile <*> arguments
+
+termInfo = defTI { termName = "hesh", version = "0.3" }
+
+flagStdin :: Term Bool
+flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
+
+optionFile :: Term String
+optionFile = fileExists (value (pos 0 "" posInfo { posName = "FILE" }))
+
+arguments = value (posAny [] posInfo { posName = "ARGS" })
+
+hesh useStdin _ args' = do
   -- First, create a cabal sandbox for the script. We want predictable
   -- results, so we won't share a cabal directory with anything else.
   --
@@ -116,10 +133,9 @@ main = do
   -- argument (rather than just relying on the script being provided
   -- on stdin). If no commandline argument is provided, we assume the
   -- script is on stdin.
-  args <- getArgs
-  source' <- case args of
-    [] -> TIO.getContents
-    [scriptPath] -> TIO.readFile scriptPath
+  (source', args) <- if useStdin || (args' == [])
+                       then (\x -> (x, args')) `fmap` TIO.getContents
+                       else (\x -> (x, tail args')) `fmap` TIO.readFile (head args')
   -- Remove any leading shebang line.
   let source = if Text.isPrefixOf "#!" source'
                  then Text.dropWhile (/= '\n') source'
@@ -162,9 +178,8 @@ main = do
   callCommandInDir "cabal install" dir
   -- Finally, run the script.
   -- Should we exec() here?
-  -- TODO: Pass the arguments to hesh onto the script.
-  -- callCommand (dir </> "dist/build/script/script") []
-  callCommand (dir </> ".cabal-sandbox/bin/script") []
+  -- TODO: Set the program name appropriately.
+  callCommand (dir </> ".cabal-sandbox/bin/script") args
 
 -- PackageConstraint -> Package
 -- Always prefer base, otherwise arbitrarily take the first module.
