@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 import Cartel (empty)
 import qualified Cartel as Cartel
@@ -116,9 +117,13 @@ main = do
   -- on stdin). If no commandline argument is provided, we assume the
   -- script is on stdin.
   args <- getArgs
-  source <- case args of
+  source' <- case args of
     [] -> TIO.getContents
     [scriptPath] -> TIO.readFile scriptPath
+  -- Remove any leading shebang line.
+  let source = if Text.isPrefixOf "#!" source'
+                 then Text.dropWhile (/= '\n') source'
+                 else source'
   let md5 = hash $ encodeUtf8 source :: Digest MD5
   dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
   createDirectoryIfMissing False dir
