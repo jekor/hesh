@@ -28,6 +28,7 @@ import Language.Haskell.Exts (fromParseResult, parseModule)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ImportDecl(..), QName(..), Name(..), Exp(..), SrcLoc(..))
 import Language.Haskell.Exts.Pretty (prettyPrint)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
+import System.Environment (getArgs)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), replaceFileName)
 import System.IO (hPutStrLn, stderr, writeFile)
@@ -108,7 +109,16 @@ main = do
   -- cabal packages already installed), however, the user of the
   -- script can specify a different directory (possibly in a permanent
   -- location).
-  source <- TIO.getContents
+  --
+  -- In order to work in shebang mode and to provide a more familiar
+  -- commandline interface, we support taking the input filename as an
+  -- argument (rather than just relying on the script being provided
+  -- on stdin). If no commandline argument is provided, we assume the
+  -- script is on stdin.
+  args <- getArgs
+  source <- case args of
+    [] -> TIO.getContents
+    [scriptPath] -> TIO.readFile scriptPath
   let md5 = hash $ encodeUtf8 source :: Digest MD5
   dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
   createDirectoryIfMissing False dir
