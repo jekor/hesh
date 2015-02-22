@@ -12,7 +12,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Generics.Uniplate.Data (universeBi)
 import Data.Key (mapWithKeyM_)
-import Data.List (intercalate, find, filter, nub)
+import Data.List (intercalate, find, filter, nub, any, takeWhile)
 import qualified Data.Map.Strict as Map
 import Data.Map.Lazy (foldrWithKey)
 import Data.Maybe (fromMaybe, catMaybes)
@@ -26,7 +26,7 @@ import Distribution.PackageDescription (condLibrary, condTreeData, exposedModule
 import Distribution.Text (display)
 import Distribution.Version (versionBranch)
 import GHC.Generics (Generic)
-import Language.Haskell.Exts (fromParseResult, parseModule)
+import Language.Haskell.Exts (parseModule, ParseResult(..), fromParseResult)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ImportDecl(..), QName(..), Name(..), Exp(..), SrcLoc(..))
 import Language.Haskell.Exts.Pretty (prettyPrint)
 import System.Console.CmdTheLine (Term, TermInfo(..), OptInfo(..), PosInfo(..), flag, value, pos, posAny, optInfo, posInfo, defTI)
@@ -154,7 +154,7 @@ hesh useStdin _ args' = do
   p <- modulesPath
   modules <- fromFileCache p =<< modulePackages
   -- Now, parse the script.
-  let ast = fromParseResult $ parseModule (Text.unpack source)
+  let ast = parseScript source
       -- Find all qualified module names to add module names to the import list (qualified).
       names = qualifiedNamesFromModule ast
       -- Find any import references.
@@ -236,3 +236,20 @@ modulePackages = foldrWithKey buildConstraints Map.empty `liftM` readHackage
                                                                   else constraint
                                                     else constraint
        exposedModules' = fromMaybe [] . fmap (exposedModules . condTreeData) . condLibrary
+
+parseScript :: Text.Text -> Module
+parseScript source =
+  case parseModule (Text.unpack source) of
+    ParseOk m -> m
+    r@(ParseFailed (SrcLoc _ line _) "TemplateHaskell is not enabled") ->
+      -- Don't recurse or we'll get an infinite loop.
+      case parseModule (Text.unpack (implicitMain source line)) of
+        ParseOk m -> m
+        _ -> fromParseResult r
+    r@(ParseFailed _ _) -> fromParseResult r
+
+implicitMain :: Text.Text -> Int -> Text.Text
+implicitMain source line =
+  Text.unlines (take (line - 2) sourceLines ++ ["main = do"] ++ map indent (drop (line - 2) sourceLines))
+ where sourceLines = Text.lines source
+       indent = Text.append "  "
