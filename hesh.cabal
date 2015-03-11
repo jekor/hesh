@@ -2,7 +2,7 @@
 -- see http://haskell.org/cabal/users-guide/
 
 name:                hesh
-version:             0.3.0
+version:             0.3.1
 -- synopsis:            
 -- description:         
 license:             MIT

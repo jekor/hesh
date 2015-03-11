@@ -93,13 +93,13 @@ main = run (term, termInfo)
 
 term = hesh <$> flagStdin <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "0.3" }
+termInfo = defTI { termName = "hesh", version = "0.3.1" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
 
 optionFile :: Term String
-optionFile = fileExists (value (pos 0 "" posInfo { posName = "FILE" }))
+optionFile = value (pos 0 "" posInfo { posName = "FILE" })
 
 arguments = value (posAny [] posInfo { posName = "ARGS" })
 
