@@ -34,7 +34,7 @@ import System.Console.CmdTheLine.Term (run)
 import System.Console.CmdTheLine.Util (fileExists)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
 import System.Exit (ExitCode(..), exitFailure)
-import System.FilePath ((</>), replaceFileName)
+import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
 import System.IO (hPutStrLn, stderr, writeFile)
 import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProcess(..), shell, proc, StdStream(..))
 
@@ -146,6 +146,7 @@ hesh useStdin noSugar _ args' = do
   -- argument (rather than just relying on the script being provided
   -- on stdin). If no commandline argument is provided, we assume the
   -- script is on stdin.
+  let scriptName = if useStdin || (args' == []) then "script" else takeBaseName (head args')
   (source'', args) <- if useStdin || (args' == [])
                         then (\x -> (x, args')) `fmap` TIO.getContents
                         else (\x -> (x, tail args')) `fmap` TIO.readFile (head args')
@@ -201,7 +202,7 @@ hesh useStdin noSugar _ args' = do
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
   -- but doesn't export the version for us, so we use 0.
-  writeFile (dir </> "script.cabal") $ Cartel.renderString "" now (V.Version [0] []) (cartel (map constrainedPackage packages))
+  writeFile (dir </> scriptName <.> "cabal") $ Cartel.renderString "" now (V.Version [0] []) (cartel (map constrainedPackage packages) scriptName)
   -- Cabal will complain without a LICENSE file.
   writeFile (dir </> "LICENSE") ""
   callCommandInDir "cabal install --only-dependencies" dir
@@ -209,7 +210,7 @@ hesh useStdin noSugar _ args' = do
   -- Finally, run the script.
   -- Should we exec() here?
   -- TODO: Set the program name appropriately.
-  callCommand (dir </> "dist/build/script/script") args
+  callCommand (dir </> "dist/build" </> scriptName </> scriptName) args
 
 -- PackageConstraint -> Package
 -- Always prefer base, otherwise arbitrarily take the first module.
@@ -218,10 +219,10 @@ constrainedPackage ps = Cartel.Package (Text.unpack (packageName package)) Nothi
                    Just p' -> p'
                    Nothing -> head ps
 
-cartel packages = Cartel.empty { Cartel.cProperties = properties
-                               , Cartel.cExecutables = [executable] }
+cartel packages name = Cartel.empty { Cartel.cProperties = properties
+                                    , Cartel.cExecutables = [executable] }
  where properties = Cartel.empty
-         { Cartel.prName         = "script"
+         { Cartel.prName         = name
          , Cartel.prVersion      = Cartel.Version [0,1]
          , Cartel.prCabalVersion = (1,18)
          , Cartel.prBuildType    = Cartel.Simple
@@ -229,7 +230,7 @@ cartel packages = Cartel.empty { Cartel.cProperties = properties
          , Cartel.prLicenseFile  = "LICENSE"
          , Cartel.prCategory     = "shell"
          }
-       executable = Cartel.Executable "script" fields
+       executable = Cartel.Executable name fields
        fields = [ Cartel.ExeMainIs "Main.hs"
                 , Cartel.ExeInfo (Cartel.DefaultLanguage Cartel.Haskell2010)
                 , Cartel.ExeInfo (Cartel.BuildDepends ([Cartel.Package "base" Nothing] ++ packages))
