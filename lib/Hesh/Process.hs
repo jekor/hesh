@@ -44,7 +44,6 @@ class ProcResult a where
 
 instance ProcResult CreateProcess where
   cmd path args = return (proc path args)
-    -- liftIO (hPutStrLn stderr ("Executing command " ++ show path ++ " with arguments: " ++ show args))
 
 instance ProcResult () where
   cmd path args = passThrough (cmd path args)
@@ -73,7 +72,12 @@ stdoutToString p' = do
   (_, Just pStdout, _, pHandle) <- liftIO (createProcess p { std_out = CreatePipe })
   output <- liftIO (hGetContents pStdout)
   liftIO (waitForSuccess p pHandle)
-  return output
+  -- Strip any trailing newline. These are almost always added to
+  -- programs since shells don't add their own newlines, and it's a
+  -- surprise to get these when reading a program's output.
+  if last output == '\n'
+    then return (init output)
+    else return output
 
 pipe :: (MonadIO m) => m CreateProcess -> m CreateProcess -> m CreateProcess
 pipe p1' p2' = do
