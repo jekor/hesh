@@ -1,5 +1,0 @@
-#!/usr/bin/env hesh
-
-progName <- System.Environment.getProgName
-args <- System.Environment.getArgs
-putStrLn $ progName ++ ": " ++ Data.List.intercalate " " args

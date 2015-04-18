@@ -2,7 +2,7 @@
 -- see http://haskell.org/cabal/users-guide/
 
 name:                hesh
-version:             0.3.1
+version:             1.0.0
 -- synopsis:            
 -- description:         
 license:             MIT
@@ -31,10 +31,27 @@ executable hesh
                        filepath,
                        hackage-db >= 1.8,
                        haskell-src-exts,
+                       hesh == 1.0.0,
+                       parsec >= 3,
                        process,
                        keys,
                        text,
                        time,
                        uniplate
   hs-source-dirs:      hesh
+  default-language:    Haskell2010
+  ghc-options:         -threaded
+
+library
+  hs-source-dirs:      lib
+  exposed-modules:     Hesh
+                       Hesh.Process
+                       Hesh.Shell
+  build-depends:       base >= 4.7,
+                       filemanip,
+                       parsec >= 3,
+                       process,
+                       template-haskell,
+                       text,
+                       transformers
   default-language:    Haskell2010

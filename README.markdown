@@ -129,6 +129,13 @@ main = do
   putStrLn $ progName ++ ": " ++ Data.List.intercalate " " args
 ```
 
+## Syntax
+
+`$[]` creates a process.
+$[command-name arg1 arg2 ...]
+all arguments are optional
+unquoted arguments are subject to shell expansion (currently just filename expansion)
+
 ## Notes
 
 For simplicity, hesh creates a new (temporary) directory for every script (and every change to your script). This keeps it from messing with your global/user Cabal installed packages and provides some determinism. However, it means that all Hackage packages are rebuild every time you change the script. This is by far the slowest part of running hesh on a new script or changed script. It can also lead to filling up your temporary directory quickly while developing and testing a script.
