@@ -120,14 +120,14 @@ importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
 packageFromModules modules m
-  | m == "Hesh" || isPrefixOf "Hesh." m = [PackageConstraint "hesh" [0, 4, 0] [0, 4, 0]]
+  | m == "Hesh" || isPrefixOf "Hesh." m = [PackageConstraint "hesh" [1, 0, 0] [1, 0, 0]]
   | otherwise = Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
 
 main = run (term, termInfo)
 
 term = hesh <$> flagStdin <*> flagNoSugar <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "0.4" }
+termInfo = defTI { termName = "hesh", version = "1.0.0" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
