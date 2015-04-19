@@ -99,6 +99,9 @@ redirect handles p' path = do
              [Stdout, Stderr] -> p { std_out = UseHandle f, std_err = UseHandle f })
   -- TODO: Close handle(s).
 
+-- I'm not sure that I want this to stick around, so I'm not
+-- documenting it. If it's common enough, it's worth keeping. If not,
+-- it might just be confusing.
 (.=) :: (MonadIO m) => m String -> m String -> m Bool
 (.=) lhs' rhs' = do
   lhs <- lhs'

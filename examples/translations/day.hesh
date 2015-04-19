@@ -1,0 +1,34 @@
+#!/usr/bin/env hesh
+
+-- Based on https://github.com/pixelb/scripts/blob/f93a55beae3baf97af64f8c833e27cd6e04fb983/scripts/day
+
+-- Shows the date for "fri week" or "mon last" for e.g.
+
+-- License: LGPLv2
+
+usage = do
+  program <- System.Environment.getProgName
+  basename <- $(basename $program)
+  $(echo "Usage $basename mon|tue|... [next]|week|last")
+  System.Exit.exitFailure
+
+main :: IO ()
+main = do
+  args <- System.Environment.getArgs
+  case args of
+    [day, which] -> printDay day which
+    [day] -> printDay day "next"
+    _ -> usage
+ where printDay day "week" = do
+         dayIsToday <- $(date +%D) .= $(date --date="next $day" +%D) -- assume we want the next week, not today
+         if dayIsToday
+           then printDate day "+2"
+           else printDate day "+1"
+       printDay day "last" = printDate day "-1"
+       printDay day "next" = do
+         dayIsToday <- $(date +%D) .= $(date --date="next $day" +%D)
+         if dayIsToday
+           then printDate day "+1"
+           else printDate day "+0"
+       printDay _ _ = usage
+       printDate day weeks = $(date --date="$day $weeks weeks" +%x)

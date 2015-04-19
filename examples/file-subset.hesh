@@ -1,0 +1,65 @@
+#!/usr/bin/env hesh
+
+-- Given a set of files, take a random subset that fit within the specified size.
+-- This assumes a small deviation among file sizes and a target subset size
+-- significantly larger than any single file size. (The algorithm is non-optimal.)
+
+-- The original use for this script was to take a subset of a music collection
+-- that would fit on a phone. For example, to take 4GB of music on the go:
+-- find ~/music | ./file-subset 4GB | (while read f; do cp "$f" /mnt/phone/music/; done)
+
+import Data.Char (isDigit, toUpper, toLower)
+import System.Posix.Files (getFileStatus, fileSize)
+import Text.ParserCombinators.ReadP (many1, satisfy, skipSpaces, option, optional, choice, char)
+import qualified Text.Read as Read
+
+main = do
+  args <- System.Environment.getArgs
+  case args of
+    [bytes] -> do
+      let (Bytes b) = read bytes :: Bytes
+      -- Take the list of files on stdin. This makes the command easier to use
+      -- in pipelines.
+      files <- lines `fmap` getContents
+      -- There's 2 ways we could go about this. One is to do this:
+      -- > sizes <- mapM System.Directory.fileSize files
+      -- but that leads us to do more work than we need (we have to read the
+      -- size of every file). Instead, let's:
+      mapM_ putStrLn =<< takeWhileLessThanM b (\x -> fileSize `fmap` getFileStatus x) =<< System.Random.Shuffle.shuffleM files
+    _ -> error "Required argument <bytes> missing."
+ where takeWhileLessThanM n f xs = takeWhileLessThanM' [] n f xs
+       takeWhileLessThanM' r n f [] = return (reverse r)
+       takeWhileLessThanM' r n f (x:xs) = do
+         i <- fromIntegral `fmap` f x
+         if i < n
+           then takeWhileLessThanM' (x:r) (n - i) f xs
+           else return (reverse r)
+
+-- Convert human-readable units into bytes.
+    
+-- This is a good example of when it's nice to have an expressive language.
+-- When I began writing this script I didn't immediately think about how the
+-- user would specify the size of the set of files. Without Haskell here, I
+-- would have had to write this as a separate executable. Although there is
+-- a case for doing so anyway, it moves us out of solving our original problem
+-- to have to do so right away.
+    
+units = ['K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']
+
+data Bytes = Bytes Integer
+
+instance Read Bytes where
+  readPrec = Text.ParserCombinators.ReadPrec.lift (do
+    i <- many1 (satisfy isDigit)
+    skipSpaces
+    multiplier <- option 1 unitP
+    return (Bytes (read i * multiplier)))
+   where unitP = do
+           u <- option 0 (do u' <- satisfy (\c -> toUpper c `elem` units)
+                             let idx = Data.Maybe.fromJust (Data.List.elemIndex (toUpper u') units)
+                             return (idx + 1))
+           binary <- option ' ' (char 'i') -- binary unit
+           choice [char 'B', char 'b']
+           return (case binary of
+                     'i' -> 2 ^ (u * 10)
+                     _ -> 1000 ^ u)

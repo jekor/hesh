@@ -1,0 +1,48 @@
+#!/usr/bin/env hesh
+
+{-# LANGUAGE ExtendedDefaultRules #-}
+
+-- Based on https://github.com/juliangruber/vipe/blob/b437a3ae7ac771b264d24b8cf55f4af91dcae034/vipe.sh
+
+--
+-- vipe(1) - Pipe in and out of $EDITOR
+--
+-- (c) 2014 Julian Gruber <julian@juliangruber.com>.
+-- MIT licensed.
+--
+-- Example:
+--
+--   $ echo foo | vipe | gist
+--   $ vipe | gist
+--
+-- This is a lightweight bash only version. For the original impementation in
+-- python, check https://github.com/madx/moreutils/blob/master/vipe
+--
+
+-- version
+version = "0.0.0"
+
+main = do
+  -- usage
+  args <- System.Environment.getArgs
+  case args of
+    ("-h":_) -> putStrLn "usage: vipe [-hV]"
+    ("-V":_) -> putStrLn version
+    _ -> do
+      -- temp file
+      pid <- System.Posix.Process.getProcessID
+      let t = "/tmp/vipe." ++ show pid ++ ".txt"
+      $(touch $t)
+
+      -- read from stdin
+      isTTY <- System.IO.hIsTerminalDevice System.IO.stdin
+      Control.Monad.when (not isTTY) ($(cat) /> t)
+
+      -- spawn editor with stdio connected
+      $($EDITOR $t) </ "/dev/tty" /> "/dev/tty"
+
+      -- write to stdout
+      $(cat $t)
+
+      -- cleanup
+      $(rm $t)

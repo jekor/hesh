@@ -30,10 +30,6 @@ heshExp s = do
     Left err -> error ("parse error: " ++ show err)
     Right tokens -> cmdExp tokens []
 
--- ls => expand "ls" >>= \x1 -> proc x1 []
--- ls * => expand "*" >>= \x1 -> expand "ls" >>= \x2 -> proc x2 [x1]
--- ls a* b* => expand "a*" >>= \x1 -> expand "b*" >>= \x2 -> expand "ls" >>= \x3 -> proc x3 (concat [x1, x2])
-
 -- We need to be able to expand some arguments in the IO monad, so
 -- each argument is expanded and bound until we finally evaluate the
 -- command.
@@ -46,7 +42,7 @@ cmdExp (t:ts) vars = do
     Right fragments -> do
       -- We have a list of fragments. We need to expand all of the
       -- environment variables in the IO monad. The easiest way seems
-      -- to be to just build a list of variables and use lets for any
+      -- to be to just build a list of variables and use return for any
       -- non-monadic expansions.
       x <- newName "x"
       [| ($(fragmentsExp fragments [])) >>= \ $(varP x) -> $(cmdExp ts (x:vars)) |]

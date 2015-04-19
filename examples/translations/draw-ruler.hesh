@@ -1,0 +1,27 @@
+#!/usr/bin/env hesh
+
+-- Based on https://github.com/janmoesen/tilde/blob/2023cb49c82e83f143eae956516d05ed353ef6f1/bin/draw-ruler
+
+-- Draw a ruler across the screen. By default, it displays the column number of
+-- the 1st, 11th, 21st, … column, and a marker on every 5 in between. You can
+-- also specify a custom string to draw as the first parameter. Every "x" in the
+-- string will be replaced by the column number.
+
+-- The string to repeat for the entire line. The letter "x" marks the start of
+-- the column number. Other characters are printed as they are.
+
+main = do
+  args <- System.Environment.getArgs
+  let str = case args of
+              [] -> "x...·....."
+              (x:_) -> x
+  numColumns <- read `fmap` $(tput cols)
+  printColumn str numColumns 1
+  putStrLn ""
+ where printColumn str numColumns currColumn
+         | currColumn > numColumns = return ()
+         | otherwise = let char = (cycle str) !! (currColumn - 1)
+                           string = if char == 'x' then show currColumn else [char]
+                       in do putStr string
+                             printColumn str numColumns (currColumn + length string)
+
