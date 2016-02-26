@@ -11,7 +11,6 @@ import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Generics.Uniplate.Data (universeBi, transformBi)
-import Data.Key (mapWithKeyM_)
 import Data.List (intercalate, find, filter, nub, any, takeWhile, isPrefixOf)
 import qualified Data.Map.Strict as Map
 import Data.Map.Lazy (foldrWithKey)
