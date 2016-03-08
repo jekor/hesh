@@ -1,4 +1,4 @@
-module Hesh ( sh, cmd, (|>), (/>), (!>), (&>), (</), (.=)
+module Hesh ( sh, cmd, (|>), (/>), (!>), (&>), (</), (/>>), (!>>), (&>>), (.=)
             , passThrough
             ) where
 

@@ -98,6 +98,8 @@ cmd "ls" ["a", "b", "c"]
 
 All of these functions are available via the `Hesh` library (which is automatically imported for use in Hesh scripts), so you can also use them in your non-Hesh Haskell programs.[^sugar]
 
+Each output operator (`/>`, `!>`, `&>`) has an append version (`/>>`, `!>>`, `&>>`) that will append to the given output file instead of overwriting it (like bash's `>>`).
+
 # Hesh as a Compiler
 
 You can use Hesh to compile native binaries. In fact, that's what Hesh is doing each time it evaluates your script:

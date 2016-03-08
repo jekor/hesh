@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 
-module Hesh.Process ( (|>), (/>), (!>), (&>), (</), pipeOps
+module Hesh.Process ( (|>), (/>), (!>), (&>), (</), (/>>), (!>>), (&>>), pipeOps
                     , cmd, passThrough, (.=)
                     ) where
 
@@ -14,7 +14,7 @@ import System.Exit (ExitCode(..))
 import System.IO (openFile, IOMode(..), hGetContents, hClose, hPutStrLn, stderr)
 import System.Process (proc, createProcess, CreateProcess(..), ProcessHandle, waitForProcess, StdStream(..), CmdSpec(..), readProcess)
 
-pipeOps = ["|>", "/>", "!>", "&>", "</"]
+pipeOps = ["|>", "/>", "!>", "&>", "</", "/>>", "!>>", "&>>"]
 
 class PipeResult a where
   (|>) :: (MonadIO m) => m CreateProcess -> m CreateProcess -> m a
@@ -22,13 +22,19 @@ class PipeResult a where
   (!>) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
   (&>) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
   (</) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
+  (/>>) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
+  (!>>) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
+  (&>>) :: (MonadIO m) => m CreateProcess -> FilePath -> m a
 
 instance PipeResult CreateProcess where
   (|>) = pipe
-  (</) = redirect [Stdin]
-  (/>) = redirect [Stdout]
-  (!>) = redirect [Stderr]
-  (&>) = redirect [Stdout, Stderr]
+  (</) = redirect [Stdin] ReadMode
+  (/>) = redirect [Stdout] WriteMode
+  (!>) = redirect [Stderr] WriteMode
+  (&>) = redirect [Stdout, Stderr] WriteMode
+  (/>>) = redirect [Stdout] AppendMode
+  (!>>) = redirect [Stderr] AppendMode
+  (&>>) = redirect [Stdout, Stderr] AppendMode
 
 instance PipeResult () where
   p1 |> p2 = passThrough (p1 |> p2)
@@ -36,6 +42,19 @@ instance PipeResult () where
   p !> path = passThrough (p !> path)
   p &> path = passThrough (p &> path)
   p </ path = passThrough (p </ path)
+  p />> path = passThrough (p />> path)
+  p !>> path = passThrough (p !>> path)
+  p &>> path = passThrough (p &>> path)
+
+instance PipeResult String where
+  p1 |> p2 = stdoutToString (p1 |> p2)
+  p /> path = stdoutToString (p /> path)
+  p !> path = stdoutToString (p !> path)
+  p &> path = stdoutToString (p &> path)
+  p </ path = stdoutToString (p </ path)
+  p />> path = stdoutToString (p />> path)  
+  p !>> path = stdoutToString (p !>> path)  
+  p &>> path = stdoutToString (p &>> path)  
 
 -- cmd is like proc but operates on the resulting process depending on
 -- its calling context.
@@ -88,10 +107,10 @@ pipe p1' p2' = do
 
 data StdHandle = Stdin | Stdout | Stderr deriving (Eq)
 
-redirect :: (MonadIO m) => [StdHandle] -> m CreateProcess -> FilePath -> m CreateProcess
-redirect handles p' path = do
+redirect :: (MonadIO m) => [StdHandle] -> IOMode -> m CreateProcess -> FilePath -> m CreateProcess
+redirect handles mode p' path = do
   p <- p'
-  f <- liftIO (openFile path (if handles == [Stdin] then ReadMode else WriteMode))
+  f <- liftIO (openFile path mode)
   return (case handles of
              [Stdin] -> p { std_in = UseHandle f }
              [Stdout] -> p { std_out = UseHandle f }

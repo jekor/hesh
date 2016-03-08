@@ -120,12 +120,8 @@ importDeclQualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False Fal
 importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
--- packageFromModules modules m
---   | m == "Hesh" || isPrefixOf "Hesh." m = [PackageConstraint "hesh" [1, 1, 0] [1, 1, 0]]
---   | otherwise = Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
-
 packageFromModules modules (m, _, Just pkg)
-  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 1, 0] [1, 1, 0]
+  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 2, 0] [1, 2, 0]
   | otherwise = Cartel.package pkg Cartel.anyVersion
 packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
@@ -135,7 +131,7 @@ main = run (term, termInfo)
 
 term = hesh <$> flagStdin <*> flagNoSugar <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "1.1.0" }
+termInfo = defTI { termName = "hesh", version = "1.2.0" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
