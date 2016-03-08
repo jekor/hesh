@@ -120,7 +120,7 @@ Hesh's first feature was its automatic Cabal file generation. Without it, your s
 
 The first time you run Hesh, it will take a while. That's because it's parsing the Hackage database (the one created by `cabal update`) and converting it into a more convient form for future runs.[^hackagecache] Hesh uses this database to look up which package a module belongs to.
 
-Hesh uses a very simplistic method of looking up packages and specifying package version constraints. In particular, its behavior is undefined if more than 1 package exports a module with the same name.
+Hesh uses a very simplistic method of looking up packages and specifying package version constraints. In particular, its behavior is undefined if more than 1 package exports a module with the same name. In order to disambiguate between packages that export the same module, you can use package-qualified imports.[^packageimports] For example, to import the vector package implementation of Data.Vector, use `import "vector" Data.Vector`.
 
 [^interactive]: Hesh is on its way to becoming an interactive shell, but there are non-trivial obstacles to making it one.
 
@@ -141,3 +141,5 @@ Hesh uses a very simplistic method of looking up packages and specifying package
 [^nosugar]: Desugaring activates the TemplateHaskell and QuasiQuotes Haskell extensions. You can skip this desugaring by passing the `--no-sugar` or `-n` option to Hesh.
 
 [^hackagecache]: The modules from the Hackage database is cached in `modules.json` in your Hackage path (usually `packages/hackage.haskell.org` in your `.cabal` directory).
+
+[^packageimports]: See [http://haskell.org/ghc/docs/latest/html/users_guide/syntax-extns.html#package-imports](http://haskell.org/ghc/docs/latest/html/users_guide/syntax-extns.html#package-imports) for more details.

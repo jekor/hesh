@@ -118,7 +118,7 @@ location' = aux <$> location
 
 -- The following parsers are for use by hesh before passing the script to the compiler.
 
-expandSyntax s = "{-# LANGUAGE TemplateHaskell, QuasiQuotes #-}\n" ++ desugar s
+expandSyntax s = "{-# LANGUAGE TemplateHaskell, QuasiQuotes, PackageImports #-}\n" ++ desugar s
 
 desugar :: String -> String
 desugar s =

@@ -1,8 +1,9 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import Cartel (empty)
-import qualified Cartel as Cartel
+import qualified Cartel
+import qualified Cartel.Ast
+import qualified Cartel.Render
 import Control.Applicative ((<$>), (<*>))
 import Control.Monad (mapM_, liftM, when)
 import Control.Exception (catch, throw, SomeException)
@@ -11,10 +12,11 @@ import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Generics.Uniplate.Data (universeBi, transformBi)
-import Data.List (intercalate, find, filter, nub, any, takeWhile, isPrefixOf)
+import Data.List (intercalate, find, filter, nub, any, takeWhile, isPrefixOf, unionBy)
 import qualified Data.Map.Strict as Map
 import Data.Map.Lazy (foldrWithKey)
 import Data.Maybe (fromMaybe, catMaybes)
+import Data.Monoid (mempty)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import qualified Data.Text.IO as TIO
@@ -107,10 +109,10 @@ defaultToUnit = transformBi defaultExpToUnit
                             , UnQual (Ident ("(" ++ name ++ ")"))
                             , Qual (ModuleName "Hesh") (Ident ("(" ++ name ++ ")")) ]
 
-importsFromModule :: Module -> [(String, Maybe String)]
+importsFromModule :: Module -> [(String, Maybe String, Maybe String)]
 importsFromModule (Module _ _ _ _ _ imports _) = map importName imports
- where importName (ImportDecl _ (ModuleName m) _ _ _ _ Nothing _) = (m, Nothing)
-       importName (ImportDecl _ (ModuleName m) _ _ _ _ (Just (ModuleName n)) _) = (m, Just n)
+ where importName (ImportDecl _ (ModuleName m) _ _ _ pkg Nothing _) = (m, Nothing, pkg)
+       importName (ImportDecl _ (ModuleName m) _ _ _ pkg (Just (ModuleName n)) _) = (m, Just n, pkg)
 
 importDeclQualified :: String -> ImportDecl
 importDeclQualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False False Nothing Nothing Nothing
@@ -118,15 +120,22 @@ importDeclQualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False Fal
 importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
-packageFromModules modules m
-  | m == "Hesh" || isPrefixOf "Hesh." m = [PackageConstraint "hesh" [1, 0, 0] [1, 0, 0]]
-  | otherwise = Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
+-- packageFromModules modules m
+--   | m == "Hesh" || isPrefixOf "Hesh." m = [PackageConstraint "hesh" [1, 1, 0] [1, 1, 0]]
+--   | otherwise = Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules
+
+packageFromModules modules (m, _, Just pkg)
+  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 1, 0] [1, 1, 0]
+  | otherwise = Cartel.package pkg Cartel.anyVersion
+packageFromModules modules (m, _, Nothing)
+  | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
+  | otherwise = constrainedPackage (Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules)
 
 main = run (term, termInfo)
 
 term = hesh <$> flagStdin <*> flagNoSugar <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "1.0.0" }
+termInfo = defTI { termName = "hesh", version = "1.1.0" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
@@ -189,19 +198,24 @@ hesh useStdin noSugar _ args' = do
       -- Find any import references.
       imports = importsFromModule ast
       -- Remove aliased modules from the names.
-      aliases = catMaybes (map snd imports)
+      aliases = catMaybes (map (\ (_, y, _) -> y) imports)
       fqNames = filter (`notElem` aliases) (map fst names)
       -- Insert qualified module usages back into the import list.
       (Module a b c d e importDecls f) = ast
       expandedImports = importDecls ++ map importDeclQualified fqNames ++ if noSugar then [] else [importDeclUnqualified "Hesh"]
       expandedAst = Module a b c d e expandedImports f
       -- From the imports, build a list of necessary packages.
-      packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
+      -- First, remove fully qualified names that were previously
+      -- imported explicitly. This is so that we don't override the
+      -- package that might have been selected for that module
+      -- manually in the import statement.
+      packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if noSugar then [] else [("Hesh", Nothing, Just "hesh")])
+      -- packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
   writeFile (dir </> "Main.hs") (prettyPrint expandedAst)
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
   -- but doesn't export the version for us, so we use 0.
-  writeFile (dir </> scriptName <.> "cabal") $ Cartel.renderString "" now (V.Version [0] []) (cartel (map constrainedPackage packages) scriptName)
+  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel packages scriptName))
   -- Cabal will complain without a LICENSE file.
   writeFile (dir </> "LICENSE") ""
   callCommandInDir "cabal install --only-dependencies" dir
@@ -210,29 +224,23 @@ hesh useStdin noSugar _ args' = do
   -- Should we exec() here?
   -- TODO: Set the program name appropriately.
   callCommand (dir </> "dist/build" </> scriptName </> scriptName) args
+ where fqNameModule name = (name, Nothing, Nothing)
 
--- PackageConstraint -> Package
--- Always prefer base, otherwise arbitrarily take the first module.
-constrainedPackage ps = Cartel.Package (Text.unpack (packageName package)) Nothing
- where package = case find (\p -> packageName p == (Text.pack "base")) ps of
-                   Just p' -> p'
-                   Nothing -> head ps
-
-cartel packages name = Cartel.empty { Cartel.cProperties = properties
-                                    , Cartel.cExecutables = [executable] }
- where properties = Cartel.empty
-         { Cartel.prName         = name
-         , Cartel.prVersion      = Cartel.Version [0,1]
-         , Cartel.prCabalVersion = (1,18)
-         , Cartel.prBuildType    = Cartel.Simple
-         , Cartel.prLicense      = Cartel.AllRightsReserved
-         , Cartel.prLicenseFile  = "LICENSE"
-         , Cartel.prCategory     = "shell"
+cartel packages name = mempty { Cartel.Ast.properties = properties
+                              , Cartel.Ast.sections = [executable] }
+ where properties = mempty
+         { Cartel.name         = name
+         , Cartel.version      = [0,1]
+         , Cartel.cabalVersion = Just (fromIntegral 1, fromIntegral 18)
+         , Cartel.buildType    = Just Cartel.simple
+         , Cartel.license      = Just Cartel.allRightsReserved
+         , Cartel.licenseFile  = "LICENSE"
+         , Cartel.category     = "shell"
          }
-       executable = Cartel.Executable name fields
-       fields = [ Cartel.ExeMainIs "Main.hs"
-                , Cartel.ExeInfo (Cartel.DefaultLanguage Cartel.Haskell2010)
-                , Cartel.ExeInfo (Cartel.BuildDepends ([Cartel.Package "base" Nothing] ++ packages))
+       executable = Cartel.executable name fields
+       fields = [ Cartel.Ast.ExeMainIs "Main.hs"
+                , Cartel.Ast.ExeInfo (Cartel.Ast.DefaultLanguage Cartel.Ast.Haskell2010)
+                , Cartel.Ast.ExeInfo (Cartel.Ast.BuildDepends ([Cartel.package "base" Cartel.anyVersion] ++ packages))
                 ]
 
 -- We make the simplifying assumption that a module only appears in a
@@ -244,6 +252,13 @@ data PackageConstraint = PackageConstraint { packageName :: Text.Text
 
 instance ToJSON PackageConstraint
 instance FromJSON PackageConstraint
+
+-- PackageConstraint -> Package
+-- Always prefer base, otherwise arbitrarily take the first module.
+constrainedPackage ps = Cartel.package (Text.unpack (packageName package)) Cartel.anyVersion
+ where package = case find (\p -> packageName p == (Text.pack "base")) ps of
+                   Just p' -> p'
+                   Nothing -> head ps
 
 modulePackages = foldrWithKey buildConstraints Map.empty `liftM` readHackage
  where buildConstraints name versions constraints = foldrWithKey (buildConstraints' name) constraints versions
