@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Hesh.Shell (sh, expandSyntax) where
+module Hesh.Shell (sh, desugar) where
 
 import Control.Applicative ((<$>), (*>), (<*))
 import Data.Char (isSpace, isAlphaNum)
@@ -117,8 +117,6 @@ location' = aux <$> location
     aux loc = uncurry (newPos (loc_filename loc)) (loc_start loc)
 
 -- The following parsers are for use by hesh before passing the script to the compiler.
-
-expandSyntax s = "{-# LANGUAGE TemplateHaskell, QuasiQuotes, PackageImports #-}\n" ++ desugar s
 
 desugar :: String -> String
 desugar s =

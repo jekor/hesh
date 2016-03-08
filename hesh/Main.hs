@@ -27,9 +27,9 @@ import Distribution.PackageDescription (condLibrary, condTreeData, exposedModule
 import Distribution.Text (display)
 import Distribution.Version (versionBranch)
 import GHC.Generics (Generic)
-import Language.Haskell.Exts (parseFileContents, ParseResult(..), fromParseResult)
-import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
-import Language.Haskell.Exts.Pretty (prettyPrint)
+import Language.Haskell.Exts (parseFileContentsWithMode, ParseMode(..), defaultParseMode, Extension(..), KnownExtension(..), ParseResult(..), fromParseResult)
+import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ModulePragma(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
+import Language.Haskell.Exts.Pretty (prettyPrintWithMode, defaultMode, PPHsMode(linePragmas))
 import System.Console.CmdTheLine (Term, TermInfo(..), OptInfo(..), PosInfo(..), flag, value, pos, posAny, optInfo, posInfo, defTI)
 import System.Console.CmdTheLine.Term (run)
 import System.Console.CmdTheLine.Util (fileExists)
@@ -40,7 +40,7 @@ import System.IO (hPutStrLn, stderr, writeFile)
 import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProcess(..), shell, proc, StdStream(..))
 
 import Hesh.Process (pipeOps)
-import Hesh.Shell (expandSyntax)
+import Hesh.Shell (desugar)
 
 waitForSuccess :: String -> ProcessHandle -> IO ()
 waitForSuccess cmd p = do
@@ -102,7 +102,7 @@ defaultToUnit = transformBi defaultExpToUnit
        -- do ... /> "..." => ... /> "..." :: IO ()
        canDefaultToUnit (InfixApp exp1 (QVarOp op) exp2) = op `elem` (concatMap operatorNames pipeOps)
        canDefaultToUnit _ = False
-       defaultToUnit exp = ExpTypeSig (SrcLoc "" 0 0) exp (TyVar (Ident "IO ()"))
+       defaultToUnit exp = ExpTypeSig (SrcLoc "<generated>" 0 0) exp (TyVar (Ident "IO ()"))
        functionNames name = [ UnQual (Ident name)
                             , Qual (ModuleName "Hesh") (Ident name) ]
        operatorNames name = [ UnQual (Symbol name)
@@ -115,13 +115,13 @@ importsFromModule (Module _ _ _ _ _ imports _) = map importName imports
        importName (ImportDecl _ (ModuleName m) _ _ _ pkg (Just (ModuleName n)) _) = (m, Just n, pkg)
 
 importDeclQualified :: String -> ImportDecl
-importDeclQualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) True False False Nothing Nothing Nothing
+importDeclQualified m = ImportDecl (SrcLoc "<generated>" 0 0) (ModuleName m) True False False Nothing Nothing Nothing
 
 importDeclUnqualified :: String -> ImportDecl
-importDeclUnqualified m = ImportDecl (SrcLoc "" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
+importDeclUnqualified m = ImportDecl (SrcLoc "<generated>" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
 packageFromModules modules (m, _, Just pkg)
-  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 2, 0] [1, 2, 0]
+  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 3, 0] [1, 3, 0]
   | otherwise = Cartel.package pkg Cartel.anyVersion
 packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
@@ -131,7 +131,7 @@ main = run (term, termInfo)
 
 term = hesh <$> flagStdin <*> flagNoSugar <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "1.2.0" }
+termInfo = defTI { termName = "hesh", version = "1.3.0" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
@@ -150,7 +150,8 @@ hesh useStdin noSugar _ args' = do
   -- argument (rather than just relying on the script being provided
   -- on stdin). If no commandline argument is provided, we assume the
   -- script is on stdin.
-  let scriptName = if useStdin || (args' == []) then "script" else takeBaseName (head args')
+  let scriptFile = if useStdin || (args' == []) then "<stdin>" else head args'
+      scriptName = if useStdin || (args' == []) then "script" else takeBaseName (head args')
   (source'', args) <- if useStdin || (args' == [])
                         then (\x -> (x, args')) `fmap` TIO.getContents
                         else (\x -> (x, tail args')) `fmap` TIO.readFile (head args')
@@ -160,7 +161,7 @@ hesh useStdin noSugar _ args' = do
                  else source''
       source = if noSugar
                  then source'
-                 else Text.pack (expandSyntax (Text.unpack source'))
+                 else Text.pack (desugar (Text.unpack source'))
       md5 = hash $ encodeUtf8 source :: Digest MD5
   --
   -- First, create a directory for the script. One option would be to
@@ -188,7 +189,7 @@ hesh useStdin noSugar _ args' = do
   p <- modulesPath
   modules <- fromFileCache p =<< modulePackages
   -- Now, parse the script.
-  let ast = defaultToUnit (parseScript source)
+  let ast = defaultToUnit (parseScript scriptFile noSugar source)
       -- Find all qualified module names to add module names to the import list (qualified).
       names = qualifiedNamesFromModule ast
       -- Find any import references.
@@ -197,9 +198,10 @@ hesh useStdin noSugar _ args' = do
       aliases = catMaybes (map (\ (_, y, _) -> y) imports)
       fqNames = filter (`notElem` aliases) (map fst names)
       -- Insert qualified module usages back into the import list.
-      (Module a b c d e importDecls f) = ast
+      (Module a b pragmas d e importDecls g) = ast
       expandedImports = importDecls ++ map importDeclQualified fqNames ++ if noSugar then [] else [importDeclUnqualified "Hesh"]
-      expandedAst = Module a b c d e expandedImports f
+      expandedPragmas = if noSugar then pragmas else pragmas ++ sugarPragmas
+      expandedAst = Module a b expandedPragmas d e expandedImports g
       -- From the imports, build a list of necessary packages.
       -- First, remove fully qualified names that were previously
       -- imported explicitly. This is so that we don't override the
@@ -207,7 +209,7 @@ hesh useStdin noSugar _ args' = do
       -- manually in the import statement.
       packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if noSugar then [] else [("Hesh", Nothing, Just "hesh")])
       -- packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
-  writeFile (dir </> "Main.hs") (prettyPrint expandedAst)
+  writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
   -- but doesn't export the version for us, so we use 0.
@@ -221,6 +223,7 @@ hesh useStdin noSugar _ args' = do
   -- TODO: Set the program name appropriately.
   callCommand (dir </> "dist/build" </> scriptName </> scriptName) args
  where fqNameModule name = (name, Nothing, Nothing)
+       sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
 
 cartel packages name = mempty { Cartel.Ast.properties = properties
                               , Cartel.Ast.sections = [executable] }
@@ -278,8 +281,11 @@ modulePackages = foldrWithKey buildConstraints Map.empty `liftM` readHackage
                                                     else constraint
        exposedModules' = fromMaybe [] . fmap (exposedModules . condTreeData) . condLibrary
 
-parseScript :: Text.Text -> Module
-parseScript source =
-  case parseFileContents (Text.unpack source) of
+parseScript :: String -> Bool -> Text.Text -> Module
+parseScript filename noSugar source =
+  case parseFileContentsWithMode
+       (defaultParseMode {parseFilename = filename, extensions = exts})
+       (Text.unpack source) of
     ParseOk m -> m
     r@(ParseFailed _ _) -> fromParseResult r
+ where exts = if noSugar then [] else [EnableExtension TemplateHaskell, EnableExtension QuasiQuotes, EnableExtension PackageImports]
