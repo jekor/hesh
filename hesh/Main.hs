@@ -121,7 +121,7 @@ importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "<generated>" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
 packageFromModules modules (m, _, Just pkg)
-  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 3, 0] [1, 3, 0]
+  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 4, 0] [1, 4, 0]
   | otherwise = Cartel.package pkg Cartel.anyVersion
 packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
@@ -129,9 +129,9 @@ packageFromModules modules (m, _, Nothing)
 
 main = run (term, termInfo)
 
-term = hesh <$> flagStdin <*> flagNoSugar <*> optionFile <*> arguments
+term = hesh <$> flagStdin <*> flagNoSugar <*> flagCompileOnly <*> optionFile <*> arguments
 
-termInfo = defTI { termName = "hesh", version = "1.3.0" }
+termInfo = defTI { termName = "hesh", version = "1.4.0" }
 
 flagStdin :: Term Bool
 flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
@@ -139,12 +139,15 @@ flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDo
 flagNoSugar :: Term Bool
 flagNoSugar = value . flag $ (optInfo [ "no-sugar", "n" ]) { optName = "NOSUGAR", optDoc = "Don't expand syntax shortcuts." }
 
+flagCompileOnly :: Term Bool
+flagCompileOnly = value . flag $ (optInfo [ "compile-only", "c" ]) { optName = "COMPILEONLY", optDoc = "Compile the script but don't run it." }
+
 optionFile :: Term String
 optionFile = value (pos 0 "" posInfo { posName = "FILE" })
 
 arguments = value (posAny [] posInfo { posName = "ARGS" })
 
-hesh useStdin noSugar _ args' = do
+hesh useStdin noSugar compileOnly _ args' = do
   -- In order to work in shebang mode and to provide a more familiar
   -- commandline interface, we support taking the input filename as an
   -- argument (rather than just relying on the script being provided
@@ -221,7 +224,10 @@ hesh useStdin noSugar _ args' = do
   -- Finally, run the script.
   -- Should we exec() here?
   -- TODO: Set the program name appropriately.
-  callCommand (dir </> "dist/build" </> scriptName </> scriptName) args
+  let path = dir </> "dist/build" </> scriptName </> scriptName
+  if compileOnly
+    then putStr path
+    else callCommand path args
  where fqNameModule name = (name, Nothing, Nothing)
        sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
 
