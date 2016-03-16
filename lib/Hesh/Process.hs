@@ -4,15 +4,16 @@ module Hesh.Process ( (|>), (/>), (!>), (&>), (</), (/>>), (!>>), (&>>), pipeOps
                     , cmd, passThrough, (.=)
                     ) where
 
-import Control.Exception (finally)
-import Control.Monad (liftM)
+import Control.Concurrent (forkIO, myThreadId, ThreadId)
+import Control.Exception (finally, bracketOnError, catch, throwTo, SomeException)
+import Control.Monad (liftM, void)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Char (isSpace)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
 import System.Exit (ExitCode(..))
-import System.IO (openFile, IOMode(..), hGetContents, hClose, hPutStrLn, stderr)
-import System.Process (proc, createProcess, CreateProcess(..), ProcessHandle, waitForProcess, StdStream(..), CmdSpec(..), readProcess)
+import System.IO (openFile, IOMode(..), hGetContents, hClose, hPutStrLn, stderr, Handle)
+import System.Process (proc, createProcess, CreateProcess(..), ProcessHandle, waitForProcess, StdStream(..), CmdSpec(..), readProcess, terminateProcess)
 
 pipeOps = ["|>", "/>", "!>", "&>", "</", "/>>", "!>>", "&>>"]
 
@@ -70,7 +71,6 @@ instance ProcResult () where
 instance ProcResult String where
   cmd path args = stdoutToString (cmd path args)
 
--- TODO: Use something like withCreateProcess to handle exceptions.
 waitForSuccess :: CreateProcess -> ProcessHandle -> IO ()
 waitForSuccess p h = do
   exit <- waitForProcess h
@@ -79,31 +79,43 @@ waitForSuccess p h = do
     ExitFailure code -> let (RawCommand command _) = cmdspec p in
                           error ("Command " ++ command ++ " exited with failure code: " ++ show code)  
 
+asyncWaitForSuccess :: CreateProcess -> ProcessHandle -> IO ()
+asyncWaitForSuccess p h = do
+  parentId <- myThreadId
+  void (forkIO (catch (waitForSuccess p h) (relay parentId)))
+ where relay :: ThreadId -> SomeException -> IO ()
+       relay threadId e = throwTo threadId e
+
+withProcess :: CreateProcess -> ((Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> IO a) -> IO a
+withProcess p f =
+  bracketOnError (createProcess p)
+                 (\ (_, _, _, h) -> do terminateProcess h)
+                 f
+
 passThrough :: (MonadIO m) => m CreateProcess -> m ()
 passThrough p' = do
   p <- p'
-  (_, _, _, pHandle) <- liftIO (createProcess p)
-  liftIO (waitForSuccess p pHandle)
+  liftIO (withProcess p (\ (_, _, _, pHandle) -> waitForSuccess p pHandle))
 
 stdoutToString :: (MonadIO m) => m CreateProcess -> m String
 stdoutToString p' = do
   p <- p'
-  (_, Just pStdout, _, pHandle) <- liftIO (createProcess p { std_out = CreatePipe })
-  output <- liftIO (hGetContents pStdout)
-  liftIO (waitForSuccess p pHandle)
+  liftIO (withProcess (p { std_out = CreatePipe })
+                      (\ (_, Just pStdout, _, pHandle) -> do output <- hGetContents pStdout
+                                                             asyncWaitForSuccess p pHandle
   -- Strip any trailing newline. These are almost always added to
   -- programs since shells don't add their own newlines, and it's a
   -- surprise to get these when reading a program's output.
-  if last output == '\n'
-    then return (init output)
-    else return output
+                                                             if not (null output) && last output == '\n'
+                                                               then return (init output)
+                                                               else return output))
 
 pipe :: (MonadIO m) => m CreateProcess -> m CreateProcess -> m CreateProcess
 pipe p1' p2' = do
   p1 <- p1'; p2 <- p2'
-  (_, Just p1Stdout, _, _) <- liftIO (createProcess p1 { std_out = CreatePipe })
-  -- TODO: Provide a way to fail on p1 failure (pipefail).
-  return (p2 { std_in = UseHandle p1Stdout })
+  liftIO (withProcess (p1 { std_out = CreatePipe })
+                      (\ (_, Just p1Stdout, _, p1Handle) -> do asyncWaitForSuccess p1 p1Handle
+                                                               return (p2 { std_in = UseHandle p1Stdout })))
 
 data StdHandle = Stdin | Stdout | Stderr deriving (Eq)
 
