@@ -109,6 +109,8 @@ You can use Hesh to compile native binaries. In fact, that's what Hesh is doing 
 3. run Cabal build in a temporary directory[^tmpdir]
 4. execute the resulting binary
 
+Normally when you run hesh it will automatically execute the given script (if it compiles successfully). If you use the `-c` option, hesh will only compile the script and output the resulting executable to stdout.
+
 ## Preprocessing
 
 Hesh's first feature was its automatic Cabal file generation. Without it, your scripts would be limited to the base libraries. From there, the preprocessor evolved hand-in-hand with Hesh's shell functions in order to make writing scripts feel as natural as possible. The preprocessor does the following:
