@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 import qualified Cartel
@@ -11,6 +12,8 @@ import Crypto.Hash (hash, digestToHexByteString, Digest, MD5)
 import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Data (Data)
+import Data.Default (def)
 import Data.Generics.Uniplate.Data (universeBi, transformBi)
 import Data.List (intercalate, find, filter, nub, any, takeWhile, isPrefixOf, unionBy)
 import qualified Data.Map.Strict as Map
@@ -21,6 +24,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import qualified Data.Text.IO as TIO
 import Data.Time.LocalTime (getZonedTime)
+import Data.Typeable (Typeable)
 import qualified Data.Version as V
 import Distribution.Hackage.DB (readHackage, hackagePath)
 import Distribution.PackageDescription (condLibrary, condTreeData, exposedModules)
@@ -30,9 +34,7 @@ import GHC.Generics (Generic)
 import Language.Haskell.Exts (parseFileContentsWithMode, ParseMode(..), defaultParseMode, Extension(..), KnownExtension(..), ParseResult(..), fromParseResult)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ModulePragma(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
 import Language.Haskell.Exts.Pretty (prettyPrintWithMode, defaultMode, PPHsMode(linePragmas))
-import System.Console.CmdTheLine (Term, TermInfo(..), OptInfo(..), PosInfo(..), flag, value, pos, posAny, optInfo, posInfo, defTI)
-import System.Console.CmdTheLine.Term (run)
-import System.Console.CmdTheLine.Util (fileExists)
+import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
@@ -41,6 +43,105 @@ import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProce
 
 import Hesh.Process (pipeOps)
 import Hesh.Shell (desugar)
+
+data Hesh = Hesh {stdin_ :: Bool
+                 ,no_sugar :: Bool
+                 ,compile_only :: Bool
+                 ,args_ :: [String]
+                 } deriving (Data, Typeable, Show, Eq)
+
+hesh = Hesh {stdin_ = False &= help "If this option is present, or if no arguments remain after option process, then the script is read from standard input."
+            ,no_sugar = False &= help "Don't expand syntax shortcuts."
+            ,compile_only = False &= help "Compile the script but don't run it."
+            ,args_ = def &= args &= typ "FILE|ARG.."
+            } &=
+       help "Run a hesh script." &=
+       summary "Hesh v1.5.1"
+
+main = do
+  opts <- cmdArgs hesh
+  -- In order to work in shebang mode and to provide a more familiar
+  -- commandline interface, we support taking the input filename as an
+  -- argument (rather than just relying on the script being provided
+  -- on stdin). If no commandline argument is provided, we assume the
+  -- script is on stdin.
+  let scriptFile = if stdin_ opts || null (args_ opts) then "<stdin>" else head (args_ opts)
+      scriptName = if stdin_ opts || null (args_ opts) then "script" else takeBaseName (head (args_ opts))
+  (source'', args) <- if stdin_ opts || null (args_ opts)
+                        then (\x -> (x, args_ opts)) `fmap` TIO.getContents
+                        else (\x -> (x, tail (args_ opts))) `fmap` TIO.readFile (head (args_ opts))
+  -- Remove any leading shebang line.
+  let source' = if Text.isPrefixOf "#!" source''
+                 then Text.dropWhile (/= '\n') source''
+                 else source''
+      source = if no_sugar opts
+                 then source'
+                 else Text.pack (desugar (Text.unpack source'))
+      md5 = hash $ encodeUtf8 source :: Digest MD5
+  --
+  -- First, create a directory for the script. One option would be to
+  -- create the directory in the current directory, but that would
+  -- depend on running the script from its directory, another is to
+  -- create it in the script's directory, but we don't know that we
+  -- have write permissions to that (if it's even a writable
+  -- directory). An always writeable option is to use a temporary
+  -- directory, however, this has the disadvantage that it'll could be
+  -- cleaned up automatically and slow down start time for later calls
+  -- of the script. Additionally, how do we name the directory to
+  -- avoid collisions? If we just use the script name there's a high
+  -- chance of collisions. If we use a hash of the script we have to
+  -- rebuild the directory every time the script changes (viable for
+  -- production but not during development).
+  --
+  -- We could compromise flexibility and safety by providing a command
+  -- line parameter for the directory. For maximum safety, we'll use a
+  -- hash of the script contents for now.
+  --
+  dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
+  hPutStrLn stderr ("Building in " ++ dir)
+  createDirectoryIfMissing False dir
+  -- First, get the module -> package+version lookup table.
+  p <- modulesPath
+  modules <- fromFileCache p =<< modulePackages
+  -- Now, parse the script.
+  let ast = defaultToUnit (parseScript scriptFile (no_sugar opts) source)
+      -- Find all qualified module names to add module names to the import list (qualified).
+      names = qualifiedNamesFromModule ast
+      -- Find any import references.
+      imports = importsFromModule ast
+      -- Remove aliased modules from the names.
+      aliases = catMaybes (map (\ (_, y, _) -> y) imports)
+      fqNames = filter (`notElem` aliases) (map fst names)
+      -- Insert qualified module usages back into the import list.
+      (Module a b pragmas d e importDecls g) = ast
+      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else [importDeclUnqualified "Hesh"]
+      expandedPragmas = if no_sugar opts then pragmas else pragmas ++ sugarPragmas
+      expandedAst = Module a b expandedPragmas d e expandedImports g
+      -- From the imports, build a list of necessary packages.
+      -- First, remove fully qualified names that were previously
+      -- imported explicitly. This is so that we don't override the
+      -- package that might have been selected for that module
+      -- manually in the import statement.
+      packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if no_sugar opts then [] else [("Hesh", Nothing, Just "hesh")])
+      -- packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
+  writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
+  now <- getZonedTime
+  -- Cartel expects us to provide the version of the Cartel library
+  -- but doesn't export the version for us, so we use 0.
+  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel packages scriptName))
+  -- Cabal will complain without a LICENSE file.
+  writeFile (dir </> "LICENSE") ""
+  callCommandInDir "cabal install --only-dependencies" dir
+  callCommandInDir "cabal build" dir
+  -- Finally, run the script.
+  -- Should we exec() here?
+  -- TODO: Set the program name appropriately.
+  let path = dir </> "dist/build" </> scriptName </> scriptName
+  if compile_only opts
+    then putStr path
+    else callCommand path args
+ where fqNameModule name = (name, Nothing, Nothing)
+       sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
 
 waitForSuccess :: String -> ProcessHandle -> IO ()
 waitForSuccess cmd p = do
@@ -126,110 +227,6 @@ packageFromModules modules (m, _, Just pkg)
 packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
   | otherwise = constrainedPackage (Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules)
-
-main = run (term, termInfo)
-
-term = hesh <$> flagStdin <*> flagNoSugar <*> flagCompileOnly <*> optionFile <*> arguments
-
-termInfo = defTI { termName = "hesh", version = "1.5.0" }
-
-flagStdin :: Term Bool
-flagStdin = value . flag $ (optInfo [ "stdin", "s" ]) { optName = "STDIN", optDoc = "If this option is present, or if no arguments remain after option processing, then the script is read from standard input." }
-
-flagNoSugar :: Term Bool
-flagNoSugar = value . flag $ (optInfo [ "no-sugar", "n" ]) { optName = "NOSUGAR", optDoc = "Don't expand syntax shortcuts." }
-
-flagCompileOnly :: Term Bool
-flagCompileOnly = value . flag $ (optInfo [ "compile-only", "c" ]) { optName = "COMPILEONLY", optDoc = "Compile the script but don't run it." }
-
-optionFile :: Term String
-optionFile = value (pos 0 "" posInfo { posName = "FILE" })
-
-arguments = value (posAny [] posInfo { posName = "ARGS" })
-
-hesh useStdin noSugar compileOnly _ args' = do
-  -- In order to work in shebang mode and to provide a more familiar
-  -- commandline interface, we support taking the input filename as an
-  -- argument (rather than just relying on the script being provided
-  -- on stdin). If no commandline argument is provided, we assume the
-  -- script is on stdin.
-  let scriptFile = if useStdin || (args' == []) then "<stdin>" else head args'
-      scriptName = if useStdin || (args' == []) then "script" else takeBaseName (head args')
-  (source'', args) <- if useStdin || (args' == [])
-                        then (\x -> (x, args')) `fmap` TIO.getContents
-                        else (\x -> (x, tail args')) `fmap` TIO.readFile (head args')
-  -- Remove any leading shebang line.
-  let source' = if Text.isPrefixOf "#!" source''
-                 then Text.dropWhile (/= '\n') source''
-                 else source''
-      source = if noSugar
-                 then source'
-                 else Text.pack (desugar (Text.unpack source'))
-      md5 = hash $ encodeUtf8 source :: Digest MD5
-  --
-  -- First, create a directory for the script. One option would be to
-  -- create the directory in the current directory, but that would
-  -- depend on running the script from its directory, another is to
-  -- create it in the script's directory, but we don't know that we
-  -- have write permissions to that (if it's even a writable
-  -- directory). An always writeable option is to use a temporary
-  -- directory, however, this has the disadvantage that it'll could be
-  -- cleaned up automatically and slow down start time for later calls
-  -- of the script. Additionally, how do we name the directory to
-  -- avoid collisions? If we just use the script name there's a high
-  -- chance of collisions. If we use a hash of the script we have to
-  -- rebuild the directory every time the script changes (viable for
-  -- production but not during development).
-  --
-  -- We could compromise flexibility and safety by providing a command
-  -- line parameter for the directory. For maximum safety, we'll use a
-  -- hash of the script contents for now.
-  --
-  dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
-  hPutStrLn stderr ("Building in " ++ dir)
-  createDirectoryIfMissing False dir
-  -- First, get the module -> package+version lookup table.
-  p <- modulesPath
-  modules <- fromFileCache p =<< modulePackages
-  -- Now, parse the script.
-  let ast = defaultToUnit (parseScript scriptFile noSugar source)
-      -- Find all qualified module names to add module names to the import list (qualified).
-      names = qualifiedNamesFromModule ast
-      -- Find any import references.
-      imports = importsFromModule ast
-      -- Remove aliased modules from the names.
-      aliases = catMaybes (map (\ (_, y, _) -> y) imports)
-      fqNames = filter (`notElem` aliases) (map fst names)
-      -- Insert qualified module usages back into the import list.
-      (Module a b pragmas d e importDecls g) = ast
-      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if noSugar then [] else [importDeclUnqualified "Hesh"]
-      expandedPragmas = if noSugar then pragmas else pragmas ++ sugarPragmas
-      expandedAst = Module a b expandedPragmas d e expandedImports g
-      -- From the imports, build a list of necessary packages.
-      -- First, remove fully qualified names that were previously
-      -- imported explicitly. This is so that we don't override the
-      -- package that might have been selected for that module
-      -- manually in the import statement.
-      packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if noSugar then [] else [("Hesh", Nothing, Just "hesh")])
-      -- packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
-  writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
-  now <- getZonedTime
-  -- Cartel expects us to provide the version of the Cartel library
-  -- but doesn't export the version for us, so we use 0.
-  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel packages scriptName))
-  -- Cabal will complain without a LICENSE file.
-  writeFile (dir </> "LICENSE") ""
-  callCommandInDir "cabal install --only-dependencies" dir
-  callCommandInDir "cabal build" dir
-  -- Finally, run the script.
-  -- Should we exec() here?
-  -- TODO: Set the program name appropriately.
-  let path = dir </> "dist/build" </> scriptName </> scriptName
-  if compileOnly
-    then putStr path
-    else callCommand path args
- where fqNameModule name = (name, Nothing, Nothing)
-       sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
 
 cartel packages name = mempty { Cartel.Ast.properties = properties
                               , Cartel.Ast.sections = [executable] }
