@@ -9,6 +9,7 @@ import Control.Exception (Exception, bracketOnError, throwIO)
 import Control.Monad (liftM, void)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Char (isSpace)
+import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
 import Data.Typeable (Typeable)
@@ -69,6 +70,16 @@ instance PipeResult String where
   p !>> path = stdoutToString (p !>> path)  
   p &>> path = stdoutToString (p &>> path)  
 
+instance PipeResult Text where
+  p1 |> p2 = stdoutToText (p1 |> p2)
+  p /> path = stdoutToText (p /> path)
+  p !> path = stdoutToText (p !> path)
+  p &> path = stdoutToText (p &> path)
+  p </ path = stdoutToText (p </ path)
+  p />> path = stdoutToText (p />> path)  
+  p !>> path = stdoutToText (p !>> path)  
+  p &>> path = stdoutToText (p &>> path)  
+
 -- cmd is like proc but operates on the resulting process depending on
 -- its calling context.
 class ProcResult a where
@@ -82,6 +93,9 @@ instance ProcResult () where
 
 instance ProcResult String where
   cmd path args = stdoutToString (cmd path args)
+
+instance ProcResult Text where
+  cmd path args = stdoutToText (cmd path args)
 
 waitForSuccess :: [RunningProcess] -> IO ()
 waitForSuccess hs = mapM_ waitForSuccess' hs
@@ -116,6 +130,19 @@ stdoutToString p' = do
   -- surprise to get these when reading a program's output.
                                                              if not (null output) && last output == '\n'
                                                                then return (init output)
+                                                               else return output))
+
+stdoutToText :: (MonadIO m) => m ProcessChain -> m Text
+stdoutToText p' = do
+  (ps, p) <- p'
+  liftIO (withProcess (p { std_out = CreatePipe })
+                      (\ (_, Just pStdout, _, pHandle) -> do output <- Text.IO.hGetContents pStdout
+                                                             waitForSuccess (ps ++ [(commandName p, pHandle)])
+  -- Strip any trailing newline. These are almost always added to
+  -- programs since shells don't add their own newlines, and it's a
+  -- surprise to get these when reading a program's output.
+                                                             if not (Text.null output) && Text.last output == '\n'
+                                                               then return (Text.init output)
                                                                else return output))
 
 pipe :: (MonadIO m) => m ProcessChain -> m ProcessChain -> m ProcessChain

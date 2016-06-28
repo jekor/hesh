@@ -56,7 +56,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.5.2"
+       summary "Hesh v1.6.0"
 
 main = do
   opts <- cmdArgs hesh
