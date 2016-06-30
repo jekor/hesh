@@ -39,6 +39,7 @@ import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
 import System.IO (hPutStrLn, stderr, writeFile)
+import System.Posix.Process (executeFile)
 import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProcess(..), shell, proc, StdStream(..))
 
 import Hesh.Process (pipeOps)
@@ -56,7 +57,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.6.0"
+       summary "Hesh v1.7.0"
 
 main = do
   opts <- cmdArgs hesh
@@ -133,13 +134,12 @@ main = do
   writeFile (dir </> "LICENSE") ""
   callCommandInDir "cabal install --only-dependencies" dir
   callCommandInDir "cabal build" dir
-  -- Finally, run the script.
-  -- Should we exec() here?
   -- TODO: Set the program name appropriately.
   let path = dir </> "dist/build" </> scriptName </> scriptName
   if compile_only opts
     then putStr path
-    else callCommand path args
+    -- Finally, run the script.
+    else executeFile path False args Nothing
  where fqNameModule name = (name, Nothing, Nothing)
        sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
 
