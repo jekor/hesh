@@ -41,7 +41,7 @@ Spawning a process with `$()` behaves somewhat similar to what you'd expect from
 2. expand variables
 3. spawn the command specified by the first token with all folowing tokens as arguments
 
-`$()` returns either a `String`{.haskell}, a `CreateProcess`{.haskell}, or `()`{.haskell} (all in the `IO`{.haskell} monad), depending on the context. This---along with some proprocessing Hesh does before compiling your script---helps make sure it behaves as you'd expect in most cases.
+`$()` returns either a `String`{.haskell}, a `CreateProcess`{.haskell}, or `()`{.haskell} (all in a `MonadIO`{.haskell} monad), depending on the context. This---along with some proprocessing Hesh does before compiling your script---helps make sure it behaves as you'd expect in most cases.
 
 ### Quoting
 

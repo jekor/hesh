@@ -34,7 +34,7 @@ import GHC.Generics (Generic)
 import Language.Haskell.Exts (parseFileContentsWithMode, ParseMode(..), defaultParseMode, Extension(..), KnownExtension(..), ParseResult(..), fromParseResult)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ModulePragma(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
 import Language.Haskell.Exts.Pretty (prettyPrintWithMode, defaultMode, PPHsMode(linePragmas))
-import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary)
+import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary, name)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
@@ -47,17 +47,19 @@ import Hesh.Shell (desugar)
 
 data Hesh = Hesh {stdin_ :: Bool
                  ,no_sugar :: Bool
+                 ,no_type_hints :: Bool
                  ,compile_only :: Bool
                  ,args_ :: [String]
                  } deriving (Data, Typeable, Show, Eq)
 
 hesh = Hesh {stdin_ = False &= help "If this option is present, or if no arguments remain after option process, then the script is read from standard input."
             ,no_sugar = False &= help "Don't expand syntax shortcuts."
+            ,no_type_hints = False &= name "t" &= help "Don't add automatic type hints."
             ,compile_only = False &= help "Compile the script but don't run it."
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.7.0"
+       summary "Hesh v1.8.0"
 
 main = do
   opts <- cmdArgs hesh
@@ -105,7 +107,7 @@ main = do
   p <- modulesPath
   modules <- fromFileCache p =<< modulePackages
   -- Now, parse the script.
-  let ast = defaultToUnit (parseScript scriptFile (no_sugar opts) source)
+  let ast = (if no_type_hints opts then id else defaultToUnit) (parseScript scriptFile (no_sugar opts) source)
       -- Find all qualified module names to add module names to the import list (qualified).
       names = qualifiedNamesFromModule ast
       -- Find any import references.
@@ -116,7 +118,7 @@ main = do
       -- Insert qualified module usages back into the import list.
       (Module a b pragmas d e importDecls g) = ast
       expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else [importDeclUnqualified "Hesh"]
-      expandedPragmas = if no_sugar opts then pragmas else pragmas ++ sugarPragmas
+      expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas ++ if no_type_hints opts then [] else typeHintPragmas
       expandedAst = Module a b expandedPragmas d e expandedImports g
       -- From the imports, build a list of necessary packages.
       -- First, remove fully qualified names that were previously
@@ -129,7 +131,7 @@ main = do
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
   -- but doesn't export the version for us, so we use 0.
-  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel packages scriptName))
+  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel opts packages scriptName))
   -- Cabal will complain without a LICENSE file.
   writeFile (dir </> "LICENSE") ""
   callCommandInDir "cabal install --only-dependencies" dir
@@ -142,6 +144,7 @@ main = do
     else executeFile path False args Nothing
  where fqNameModule name = (name, Nothing, Nothing)
        sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
+       typeHintPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "PartialTypeSignatures"]]
 
 waitForSuccess :: String -> ProcessHandle -> IO ()
 waitForSuccess cmd p = do
@@ -203,7 +206,7 @@ defaultToUnit = transformBi defaultExpToUnit
        -- do ... /> "..." => ... /> "..." :: IO ()
        canDefaultToUnit (InfixApp exp1 (QVarOp op) exp2) = op `elem` (concatMap operatorNames pipeOps)
        canDefaultToUnit _ = False
-       defaultToUnit exp = ExpTypeSig (SrcLoc "<generated>" 0 0) exp (TyVar (Ident "IO ()"))
+       defaultToUnit exp = ExpTypeSig (SrcLoc "<generated>" 0 0) exp (TyVar (Ident "_ ()"))
        functionNames name = [ UnQual (Ident name)
                             , Qual (ModuleName "Hesh") (Ident name) ]
        operatorNames name = [ UnQual (Symbol name)
@@ -228,8 +231,8 @@ packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
   | otherwise = constrainedPackage (Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules)
 
-cartel packages name = mempty { Cartel.Ast.properties = properties
-                              , Cartel.Ast.sections = [executable] }
+cartel opts packages name = mempty { Cartel.Ast.properties = properties
+                                   , Cartel.Ast.sections = [executable] }
  where properties = mempty
          { Cartel.name         = name
          , Cartel.version      = [0,1]
@@ -243,7 +246,7 @@ cartel packages name = mempty { Cartel.Ast.properties = properties
        fields = [ Cartel.Ast.ExeMainIs "Main.hs"
                 , Cartel.Ast.ExeInfo (Cartel.Ast.DefaultLanguage Cartel.Ast.Haskell2010)
                 , Cartel.Ast.ExeInfo (Cartel.Ast.BuildDepends ([Cartel.package "base" Cartel.anyVersion] ++ packages))
-                , Cartel.Ast.ExeInfo (Cartel.Ast.GHCOptions (["-threaded"]))
+                , Cartel.Ast.ExeInfo (Cartel.Ast.GHCOptions (["-threaded"] ++ if no_type_hints opts then [] else ["-fno-warn-partial-type-signatures"]))
                 ]
 
 -- We make the simplifying assumption that a module only appears in a

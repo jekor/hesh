@@ -5,8 +5,9 @@ module Hesh.Process ( (|>), (/>), (!>), (&>), (</), (/>>), (!>>), (&>>), pipeOps
                     , ProcessFailure, cmd, passThrough, (.=)
                     ) where
 
-import Control.Exception (Exception, bracketOnError, throwIO)
+import Control.Exception (Exception, bracketOnError)
 import Control.Monad (liftM, void)
+import Control.Monad.Catch (throwM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Char (isSpace)
 import Data.Text (Text)
@@ -103,7 +104,7 @@ waitForSuccess hs = mapM_ waitForSuccess' hs
          exit <- waitForProcess handle
          case exit of
            ExitSuccess -> return ()
-           ExitFailure code -> throwIO (ProcessFailure name code)
+           ExitFailure code -> throwM (ProcessFailure name code)
 
 withProcess :: CreateProcess -> ((Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> IO a) -> IO a
 withProcess p f =

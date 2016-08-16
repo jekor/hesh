@@ -4,6 +4,7 @@
 module Hesh.Shell (sh, desugar) where
 
 import Control.Applicative ((<$>), (*>), (<*))
+import Control.Monad.IO.Class (liftIO)
 import Data.Char (isSpace, isAlphaNum)
 import Language.Haskell.TH (Q, location, Name, mkName, newName, stringL, litE, varE, listE, varP)
 import Language.Haskell.TH.Quote (QuasiQuoter(..), dataToExpQ)
@@ -59,7 +60,7 @@ fragmentsExp (f:fs) vars = do
 fragmentExp :: Fragment -> Q Exp
 fragmentExp (FragmentString s) = [| return $(litE (stringL s)) |]
 fragmentExp (FragmentIdentifier i) = [| return $(varE (mkName i)) |]
-fragmentExp (FragmentEnvVar e) = [| getEnv $(litE (stringL e)) |]
+fragmentExp (FragmentEnvVar e) = [| liftIO (getEnv $(litE (stringL e))) |]
 
 fragmentsP :: Parser [Fragment]
 fragmentsP = many (try (variableP >>= \x -> case x of
