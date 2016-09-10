@@ -12,13 +12,14 @@ import Crypto.Hash (hash, digestToHexByteString, Digest, MD5)
 import Data.Aeson (Value(..), ToJSON(..), FromJSON(..), encode, decode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (isDigit)
 import Data.Data (Data)
 import Data.Default (def)
 import Data.Generics.Uniplate.Data (universeBi, transformBi)
 import Data.List (intercalate, find, filter, nub, any, takeWhile, isPrefixOf, unionBy)
 import qualified Data.Map.Strict as Map
 import Data.Map.Lazy (foldrWithKey)
-import Data.Maybe (fromMaybe, catMaybes)
+import Data.Maybe (fromMaybe, catMaybes, isJust)
 import Data.Monoid (mempty)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
@@ -60,7 +61,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.9.0"
+       summary "Hesh v1.10.0"
 
 main = do
   opts <- cmdArgs hesh
@@ -118,7 +119,7 @@ main = do
       fqNames = filter (`notElem` aliases) (map fst names)
       -- Insert qualified module usages back into the import list.
       (Module a b pragmas d e importDecls g) = ast
-      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else [importDeclUnqualified "Hesh"]
+      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else (if isJust (find (\(m, _, _) -> m == "Hesh") imports) then [] else [importDeclUnqualified "Hesh"])
       expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas ++ if no_type_hints opts then [] else typeHintPragmas
       expandedAst = Module a b expandedPragmas d e expandedImports g
       -- From the imports, build a list of necessary packages.
@@ -127,7 +128,6 @@ main = do
       -- package that might have been selected for that module
       -- manually in the import statement.
       packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if no_sugar opts then [] else [("Hesh", Nothing, Just "hesh")])
-      -- packages = map (packageFromModules modules) (map fst imports ++ fqNames ++ if noSugar then [] else ["Hesh"])
   writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
   now <- getZonedTime
   -- Cartel expects us to provide the version of the Cartel library
@@ -226,8 +226,16 @@ importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "<generated>" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
 packageFromModules modules (m, _, Just pkg)
-  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion -- [1, 5, 0] [1, 5, 0]
-  | otherwise = Cartel.package pkg Cartel.anyVersion
+  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion
+  | otherwise =
+      let parts = Text.splitOn "-" (Text.pack pkg)
+      in case parts of
+           [_] -> Cartel.package pkg Cartel.anyVersion
+           ps -> if Text.all (\c -> isDigit c || c == '.') (last ps)
+                   then let version = map (read . Text.unpack) (Text.splitOn "." (last ps))
+                            package = Text.unpack (Text.intercalate "-" (init ps))
+                        in Cartel.package package (Cartel.eq version)
+                   else Cartel.package pkg Cartel.anyVersion
 packageFromModules modules (m, _, Nothing)
   | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
   | otherwise = constrainedPackage (Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules)
