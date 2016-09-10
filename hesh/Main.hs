@@ -32,6 +32,7 @@ import Distribution.Text (display)
 import Distribution.Version (versionBranch)
 import GHC.Generics (Generic)
 import Language.Haskell.Exts (parseFileContentsWithMode, ParseMode(..), defaultParseMode, Extension(..), KnownExtension(..), ParseResult(..), fromParseResult)
+import Language.Haskell.Exts.Fixity (applyFixities, infix_, infixl_, infixr_)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ModulePragma(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
 import Language.Haskell.Exts.Pretty (prettyPrintWithMode, defaultMode, PPHsMode(linePragmas))
 import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary, name)
@@ -59,7 +60,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.8.0"
+       summary "Hesh v1.9.0"
 
 main = do
   opts <- cmdArgs hesh
@@ -291,7 +292,9 @@ modulePackages = foldrWithKey buildConstraints Map.empty `liftM` readHackage
 parseScript :: String -> Bool -> Text.Text -> Module
 parseScript filename noSugar source =
   case parseFileContentsWithMode
-       (defaultParseMode {parseFilename = filename, extensions = exts})
+       (defaultParseMode { parseFilename = filename
+                         , extensions = exts
+                         , fixities = Just (infixl_ 8 ["^..", "^?", "^?!", "^@..", "^@?", "^@?!", "^.", "^@."])})
        (Text.unpack source) of
     ParseOk m -> m
     r@(ParseFailed _ _) -> fromParseResult r
