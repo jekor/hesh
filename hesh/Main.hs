@@ -37,7 +37,7 @@ import Language.Haskell.Exts.Fixity (applyFixities, infix_, infixl_, infixr_)
 import Language.Haskell.Exts.Syntax (Module(..), ModuleName(..), ModulePragma(..), ImportDecl(..), QName(..), Name(..), Exp(..), Stmt(..), Type(..), SrcLoc(..), QOp(..))
 import Language.Haskell.Exts.Pretty (prettyPrintWithMode, defaultMode, PPHsMode(linePragmas))
 import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary, name)
-import System.Directory (getTemporaryDirectory, createDirectoryIfMissing)
+import System.Directory (getTemporaryDirectory, createDirectoryIfMissing, doesFileExist)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
 import System.IO (hPutStrLn, stderr, writeFile)
@@ -61,7 +61,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.10.0"
+       summary "Hesh v1.10.1"
 
 main = do
   opts <- cmdArgs hesh
@@ -103,42 +103,44 @@ main = do
   -- hash of the script contents for now.
   --
   dir <- (</> ("hesh-" ++ (Text.unpack $ decodeUtf8 $ digestToHexByteString md5))) `liftM` getTemporaryDirectory
-  hPutStrLn stderr ("Building in " ++ dir)
-  createDirectoryIfMissing False dir
-  -- First, get the module -> package+version lookup table.
-  p <- modulesPath
-  modules <- fromFileCache p =<< modulePackages
-  -- Now, parse the script.
-  let ast = (if no_type_hints opts then id else defaultToUnit) (parseScript scriptFile (no_sugar opts) source)
-      -- Find all qualified module names to add module names to the import list (qualified).
-      names = qualifiedNamesFromModule ast
-      -- Find any import references.
-      imports = importsFromModule ast
-      -- Remove aliased modules from the names.
-      aliases = catMaybes (map (\ (_, y, _) -> y) imports)
-      fqNames = filter (`notElem` aliases) (map fst names)
-      -- Insert qualified module usages back into the import list.
-      (Module a b pragmas d e importDecls g) = ast
-      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else (if isJust (find (\(m, _, _) -> m == "Hesh") imports) then [] else [importDeclUnqualified "Hesh"])
-      expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas ++ if no_type_hints opts then [] else typeHintPragmas
-      expandedAst = Module a b expandedPragmas d e expandedImports g
-      -- From the imports, build a list of necessary packages.
-      -- First, remove fully qualified names that were previously
-      -- imported explicitly. This is so that we don't override the
-      -- package that might have been selected for that module
-      -- manually in the import statement.
-      packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if no_sugar opts then [] else [("Hesh", Nothing, Just "hesh")])
-  writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
-  now <- getZonedTime
-  -- Cartel expects us to provide the version of the Cartel library
-  -- but doesn't export the version for us, so we use 0.
-  writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel opts packages scriptName))
-  -- Cabal will complain without a LICENSE file.
-  writeFile (dir </> "LICENSE") ""
-  callCommandInDir "cabal install --only-dependencies" dir
-  callCommandInDir "cabal build" dir
   -- TODO: Set the program name appropriately.
   let path = dir </> "dist/build" </> scriptName </> scriptName
+  binaryExists <- doesFileExist path
+  when (not binaryExists) $ do
+    hPutStrLn stderr ("Building in " ++ dir)
+    createDirectoryIfMissing False dir
+    -- First, get the module -> package+version lookup table.
+    p <- modulesPath
+    modules <- fromFileCache p =<< modulePackages
+    -- Now, parse the script.
+    let ast = (if no_type_hints opts then id else defaultToUnit) (parseScript scriptFile (no_sugar opts) source)
+        -- Find all qualified module names to add module names to the import list (qualified).
+        names = qualifiedNamesFromModule ast
+        -- Find any import references.
+        imports = importsFromModule ast
+        -- Remove aliased modules from the names.
+        aliases = catMaybes (map (\ (_, y, _) -> y) imports)
+        fqNames = filter (`notElem` aliases) (map fst names)
+        -- Insert qualified module usages back into the import list.
+        (Module a b pragmas d e importDecls g) = ast
+        expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else (if isJust (find (\(m, _, _) -> m == "Hesh") imports) then [] else [importDeclUnqualified "Hesh"])
+        expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas ++ if no_type_hints opts then [] else typeHintPragmas
+        expandedAst = Module a b expandedPragmas d e expandedImports g
+        -- From the imports, build a list of necessary packages.
+        -- First, remove fully qualified names that were previously
+        -- imported explicitly. This is so that we don't override the
+        -- package that might have been selected for that module
+        -- manually in the import statement.
+        packages = map (packageFromModules modules) (unionBy (\ (x, _, _) (x', _, _) -> x == x') imports (map fqNameModule fqNames) ++ if no_sugar opts then [] else [("Hesh", Nothing, Just "hesh")])
+    writeFile (dir </> "Main.hs") (prettyPrintWithMode (defaultMode { linePragmas = True }) expandedAst)
+    now <- getZonedTime
+    -- Cartel expects us to provide the version of the Cartel library
+    -- but doesn't export the version for us, so we use 0.
+    writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel opts packages scriptName))
+    -- Cabal will complain without a LICENSE file.
+    writeFile (dir </> "LICENSE") ""
+    callCommandInDir "cabal install --only-dependencies" dir
+    callCommandInDir "cabal build" dir
   if compile_only opts
     then putStr path
     -- Finally, run the script.
