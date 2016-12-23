@@ -40,7 +40,7 @@ import System.Console.CmdArgs (cmdArgs, (&=), help, typ, args, summary, name)
 import System.Directory (getTemporaryDirectory, createDirectoryIfMissing, doesFileExist)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>), (<.>), replaceFileName, takeBaseName)
-import System.IO (hPutStrLn, stderr, writeFile)
+import System.IO (hPutStrLn, hPutStr, stderr, writeFile, hGetContents, Handle)
 import System.Posix.Process (executeFile)
 import System.Process (ProcessHandle, waitForProcess, createProcess, CreateProcess(..), shell, proc, StdStream(..))
 
@@ -51,6 +51,7 @@ data Hesh = Hesh {stdin_ :: Bool
                  ,no_sugar :: Bool
                  ,no_type_hints :: Bool
                  ,compile_only :: Bool
+                 ,verbose :: Bool
                  ,args_ :: [String]
                  } deriving (Data, Typeable, Show, Eq)
 
@@ -58,10 +59,11 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,no_sugar = False &= help "Don't expand syntax shortcuts."
             ,no_type_hints = False &= name "t" &= help "Don't add automatic type hints."
             ,compile_only = False &= help "Compile the script but don't run it."
+            ,verbose = False &= help "Display more information, such as Cabal output."
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Run a hesh script." &=
-       summary "Hesh v1.10.1"
+       summary "Hesh v1.11.0"
 
 main = do
   opts <- cmdArgs hesh
@@ -107,7 +109,7 @@ main = do
   let path = dir </> "dist/build" </> scriptName </> scriptName
   binaryExists <- doesFileExist path
   when (not binaryExists) $ do
-    hPutStrLn stderr ("Building in " ++ dir)
+    when (verbose opts) $ hPutStrLn stderr ("Building in " ++ dir)
     createDirectoryIfMissing False dir
     -- First, get the module -> package+version lookup table.
     p <- modulesPath
@@ -139,8 +141,8 @@ main = do
     writeFile (dir </> scriptName <.> "cabal") (Cartel.Render.renderNoIndent (cartel opts packages scriptName))
     -- Cabal will complain without a LICENSE file.
     writeFile (dir </> "LICENSE") ""
-    callCommandInDir "cabal install --only-dependencies" dir
-    callCommandInDir "cabal build" dir
+    callCommandInDir "cabal install --only-dependencies" dir (verbose opts)
+    callCommandInDir "cabal build" dir (verbose opts)
   if compile_only opts
     then putStr path
     -- Finally, run the script.
@@ -149,25 +151,28 @@ main = do
        sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
        typeHintPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "PartialTypeSignatures"]]
 
-waitForSuccess :: String -> ProcessHandle -> IO ()
-waitForSuccess cmd p = do
+waitForSuccess :: String -> ProcessHandle -> Maybe Handle -> IO ()
+waitForSuccess cmd p out = do
   code <- waitForProcess p
   when (code /= ExitSuccess) $ do
+    case out of
+      Just o -> hPutStr stderr =<< hGetContents o
+      Nothing -> return ()
     hPutStrLn stderr $ cmd ++ ": exited with code " ++ show code
     exitFailure
 
-callCommandInDir :: String -> FilePath -> IO ()
-callCommandInDir cmd dir = do
+callCommandInDir :: String -> FilePath -> Bool -> IO ()
+callCommandInDir cmd dir verbose' = do
   -- GHC is noisy on stdout. It should go to stderr instead.
   -- TODO: Move this into a more appropriate place. It just
   -- happens to work here.
-  (_, _, _, p) <- createProcess (shell cmd) { cwd = Just dir, std_out = UseHandle stderr }
-  waitForSuccess cmd p
+  (_, out, _, p) <- createProcess (shell cmd) { cwd = Just dir, std_out = (if verbose' then UseHandle stderr else CreatePipe) }
+  waitForSuccess cmd p out
 
 callCommand :: FilePath -> [String] -> IO ()
 callCommand path args = do
   (_, _, _, p) <- createProcess (proc path args)
-  waitForSuccess path p
+  waitForSuccess path p Nothing
 
 catchAny :: IO a -> (SomeException -> IO a) -> IO a
 catchAny = catch
