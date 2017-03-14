@@ -67,7 +67,7 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Build/run a hesh script." &=
-       summary "Hesh v1.12.0"
+       summary "Hesh v1.12.1"
 
 main = do
   opts <- cmdArgs hesh
@@ -94,8 +94,8 @@ main = do
       fqNames = filter (`notElem` aliases) (map fst names)
       -- Insert qualified module usages back into the import list.
       (Module a b pragmas d e importDecls g) = ast
-      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else (if isJust (find (\(m, _, _) -> m == "Hesh") imports) then [] else [importDeclUnqualified "Hesh"])
-      expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas ++ if no_type_hints opts then [] else typeHintPragmas
+      expandedImports = importDecls ++ map importDeclQualified fqNames ++ if no_sugar opts then [] else (if isJust (find (\(m, _, _) -> m == "Hesh") imports) then [] else [importDeclUnqualified "Hesh"]) ++ if no_type_hints opts then [] else [importDeclQualified "Control.Monad.IO.Class"]
+      expandedPragmas = pragmas ++ if no_sugar opts then [] else sugarPragmas
       expandedAst = Module a b expandedPragmas d e expandedImports g
       -- From the imports, build a list of necessary packages.
       -- First, remove fully qualified names that were previously
@@ -132,7 +132,6 @@ main = do
         else executeFile path False args Nothing
  where fqNameModule name = (name, Nothing, Nothing)
        sugarPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "TemplateHaskell", Ident "QuasiQuotes", Ident "PackageImports"]]
-       typeHintPragmas = [LanguagePragma (SrcLoc "<generated>" 0 0) [Ident "PartialTypeSignatures"]]
 
 waitForSuccess :: String -> ProcessHandle -> Maybe Handle -> IO ()
 waitForSuccess cmd p out = do
@@ -197,7 +196,7 @@ defaultToUnit = transformBi defaultExpToUnit
        -- do ... /> "..." => ... /> "..." :: IO ()
        canDefaultToUnit (InfixApp exp1 (QVarOp op) exp2) = op `elem` (concatMap operatorNames pipeOps)
        canDefaultToUnit _ = False
-       defaultToUnit exp = ExpTypeSig (SrcLoc "<generated>" 0 0) exp (TyVar (Ident "_ ()"))
+       defaultToUnit exp = ExpTypeSig (SrcLoc "<generated>" 0 0) exp (TyVar (Ident "(Control.Monad.IO.Class.MonadIO m) => m ()"))
        functionNames name = [ UnQual (Ident name)
                             , Qual (ModuleName "Hesh") (Ident name) ]
        operatorNames name = [ UnQual (Symbol name)
@@ -245,7 +244,7 @@ cartel opts packages name = mempty { Cartel.Ast.properties = properties
        fields = [ Cartel.Ast.ExeMainIs "Main.hs"
                 , Cartel.Ast.ExeInfo (Cartel.Ast.DefaultLanguage Cartel.Ast.Haskell2010)
                 , Cartel.Ast.ExeInfo (Cartel.Ast.BuildDepends ([Cartel.package "base" Cartel.anyVersion] ++ packages))
-                , Cartel.Ast.ExeInfo (Cartel.Ast.GHCOptions (["-threaded"] ++ if no_type_hints opts then [] else ["-fno-warn-partial-type-signatures"]))
+                , Cartel.Ast.ExeInfo (Cartel.Ast.GHCOptions (["-threaded"]))
                 ]
 
 -- We make the simplifying assumption that a module only appears in a
