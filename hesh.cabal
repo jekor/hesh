@@ -1,5 +1,5 @@
 name:                hesh
-version:             1.13.0
+version:             1.14.0
 synopsis:            the Haskell Extensible Shell: Haskell for Bash-style scripts
 description:         Hesh makes writing scripts in Haskell easier by providing Bash-style syntax for running commands, implicit module imports, and automatic dependency inference and Cabal file generation. It allows shebang execution of scripts.
 homepage:            https://github.com/jekor/hesh
@@ -33,7 +33,7 @@ executable hesh
                        filepath,
                        hackage-db >= 1.8,
                        haskell-src-exts < 1.18,
-                       hesh == 1.13.0,
+                       hesh == 1.14.0,
                        parsec >= 3,
                        process,
                        text,
@@ -51,6 +51,7 @@ library
                        Hesh.Process
                        Hesh.Shell
   build-depends:       base >= 4.7 && < 6,
+                       bytestring,
                        exceptions,
                        filemanip,
                        parsec >= 3,

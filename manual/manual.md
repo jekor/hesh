@@ -96,6 +96,10 @@ cmd "ls" ["a", "b", "c"]
 
 :   Read a file as input to a process. This behaves the same as Bash's `<`.
 
+`<//`
+
+:   Read a String (or Text or strict ByteString) as input to a process. Note that this requires the program to be compiled with `-threaded` (the default if executed by `hesh` itself).
+
 All of these functions are available via the `Hesh` library (which is automatically imported for use in Hesh scripts), so you can also use them in your non-Hesh Haskell programs.[^sugar]
 
 Each output operator (`/>`, `!>`, `&>`) has an append version (`/>>`, `!>>`, `&>>`) that will append to the given output file instead of overwriting it (like bash's `>>`).

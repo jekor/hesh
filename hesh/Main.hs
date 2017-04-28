@@ -71,7 +71,9 @@ hesh = Hesh {stdin_ = False &= help "If this option is present, or if no argumen
             ,args_ = def &= args &= typ "FILE|ARG.."
             } &=
        help "Build/run a hesh script." &=
-       summary "Hesh v1.13.0"
+       summary ("Hesh v" ++ intercalate "." (map show heshCartelVersion))
+
+heshCartelVersion = [1, 14, 0]
 
 main = do
   opts <- cmdArgs hesh
@@ -220,7 +222,7 @@ importDeclUnqualified :: String -> ImportDecl
 importDeclUnqualified m = ImportDecl (SrcLoc "<generated>" 0 0) (ModuleName m) False False False Nothing Nothing Nothing
 
 packageFromModules modules (m, _, Just pkg)
-  | pkg == "hesh" = Cartel.package "hesh" Cartel.anyVersion
+  | pkg == "hesh" = Cartel.package "hesh" (Cartel.eq heshCartelVersion)
   | otherwise =
       let parts = Text.splitOn "-" (Text.pack pkg)
       in case parts of
@@ -231,7 +233,7 @@ packageFromModules modules (m, _, Just pkg)
                         in Cartel.package package (Cartel.eq version)
                    else Cartel.package pkg Cartel.anyVersion
 packageFromModules modules (m, _, Nothing)
-  | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" Cartel.anyVersion
+  | m == "Hesh" || isPrefixOf "Hesh." m = Cartel.package "hesh" (Cartel.eq heshCartelVersion)
   | otherwise = constrainedPackage (Map.findWithDefault (error ("Module \"" ++ m ++ "\" not found in Hackage list.")) (Text.pack m) modules)
 
 cartel opts packages name = mempty { Cartel.Ast.properties = properties
