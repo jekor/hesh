@@ -150,4 +150,4 @@ Hesh uses a very simplistic method of looking up packages and specifying package
 
 [^hackagecache]: The modules from the Hackage database is cached in `modules.json` in your Hackage path (usually `packages/hackage.haskell.org` in your `.cabal` directory).
 
-[^packageimports]: See [http://haskell.org/ghc/docs/latest/html/users_guide/syntax-extns.html#package-imports](http://haskell.org/ghc/docs/latest/html/users_guide/syntax-extns.html#package-imports) for more details.
+[^packageimports]: See [http://haskell.org/ghc/docs/latest/html/users_guide/syntax-extns.html#package-imports](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/glasgow_exts.html#package-qualified-imports) for more details.
