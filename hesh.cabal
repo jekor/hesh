@@ -31,7 +31,7 @@ executable hesh
                        data-default,
                        directory,
                        filepath,
-                       hackage-db >= 1.8,
+                       hackage-db >= 1.8 && < 2.0,
                        haskell-src-exts < 1.18,
                        hesh == 1.14.0,
                        parsec >= 3,
