@@ -30,7 +30,6 @@ import qualified Data.Version as V
 import Distribution.Hackage.DB (readHackage', hackagePath)
 import Distribution.PackageDescription (condLibrary, condTreeData, exposedModules)
 import Distribution.Text (display)
-import Distribution.Version (versionBranch)
 import GHC.Generics (Generic)
 import Language.Haskell.Exts (parseFileContentsWithMode, ParseMode(..), defaultParseMode, Extension(..), KnownExtension(..), ParseResult(..), fromParseResult)
 import Language.Haskell.Exts.Fixity (applyFixities, infix_, infixl_, infixr_)
@@ -273,7 +272,7 @@ constrainedPackage ps = Cartel.package (Text.unpack (packageName package)) Carte
 
 modulePackages hackagePath = foldrWithKey buildConstraints Map.empty `liftM` readHackage' hackagePath
  where buildConstraints name versions constraints = foldrWithKey (buildConstraints' name) constraints versions
-       buildConstraints' name version meta constraints = foldr (\m cs -> Map.alter (alterConstraint (Text.pack name) (versionBranch version)) m cs) constraints (map (Text.pack . display) (exposedModules' meta))
+       buildConstraints' name version meta constraints = foldr (\m cs -> Map.alter (alterConstraint (Text.pack name) (V.versionBranch version)) m cs) constraints (map (Text.pack . display) (exposedModules' meta))
        alterConstraint packageName' version constraint =
          case constraint of
            Nothing -> Just [PackageConstraint packageName' version version]
